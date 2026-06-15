@@ -8,6 +8,7 @@ import FacilitiesHero from "../components/FacilitiesHero";
 import MasterPlanHero from "../components/MasterPlanHero";
 import JourneyMap from "../components/JourneyMap";
 import EnquiryForm from "../components/EnquiryForm";
+import AppointmentForm from "../components/AppointmentForm";
 
 export default function Home() {
   return (
@@ -37,6 +38,7 @@ export default function Home() {
       <FacilitiesHero />
       <MasterPlanHero />
       <JourneyMap />
+      <AppointmentForm />
       <EnquiryForm />
     </div>
   );
