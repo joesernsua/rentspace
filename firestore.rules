@@ -1,0 +1,17 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Demo-only rules: tighten validation and add authentication before production.
+    match /enquiries/{enquiryId} {
+      allow create: if true;
+      allow read, update, delete: if false;
+    }
+
+    // Demo-only rules: tighten validation and add authentication before production.
+    match /appointments/{appointmentId} {
+      allow create: if true;
+      allow read, update, delete: if false;
+    }
+  }
+}

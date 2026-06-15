@@ -7,6 +7,7 @@ import ConnectSanct from "../components/ConnectSanct";
 import FacilitiesHero from "../components/FacilitiesHero";
 import MasterPlanHero from "../components/MasterPlanHero";
 import JourneyMap from "../components/JourneyMap";
+import EnquiryForm from "../components/EnquiryForm";
 
 export default function Home() {
   return (
@@ -36,6 +37,7 @@ export default function Home() {
       <FacilitiesHero />
       <MasterPlanHero />
       <JourneyMap />
+      <EnquiryForm />
     </div>
   );
 }
