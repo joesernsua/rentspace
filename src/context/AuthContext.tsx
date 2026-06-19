@@ -1,17 +1,4 @@
-import {
-  GoogleAuthProvider,
-  onAuthStateChanged,
-  signInWithPopup,
-  signOut,
-  type User,
-} from "firebase/auth";
-import {
-  doc,
-  getDoc,
-  serverTimestamp,
-  setDoc,
-  type Timestamp,
-} from "firebase/firestore";
+import { onAuthStateChanged, type User as FirebaseUser } from "firebase/auth";
 import {
   createContext,
   useContext,
@@ -20,133 +7,99 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { auth, db } from "../config/firebase";
+import { auth } from "../config/firebase";
+import {
+  continueWithGoogle,
+  getUserProfile,
+  loginWithGoogleUser,
+  logoutUser,
+  registerUser,
+} from "../services/authService";
+import type { AppUser, RegisterUserInput, UserRole } from "../types/User";
 
-export type UserRole = "customer" | "owner" | "admin";
+export type UserProfile = AppUser;
+export type { UserRole };
 
-export interface UserProfile {
-  uid: string;
-  displayName: string | null;
-  email: string | null;
-  photoURL: string | null;
-  phoneNumber: string | null;
-  role: UserRole;
-  createdAt?: Timestamp;
-  updatedAt?: Timestamp;
-}
-
-interface AuthContextValue {
-  currentUser: User | null;
-  userProfile: UserProfile | null;
+type AuthContextValue = {
+  currentUser: FirebaseUser | null;
+  userProfile: AppUser | null;
   loading: boolean;
-  loginWithGoogle: () => Promise<void>;
+  register: (input: RegisterUserInput) => Promise<AppUser>;
   logout: () => Promise<void>;
-}
+  continueWithGoogle: () => Promise<{ user: FirebaseUser; profile: AppUser | null }>;
+  loginWithGoogle: (role?: UserRole) => Promise<AppUser>;
+  selectRole: (role: UserRole) => Promise<AppUser>;
+};
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export class UserProfileSaveError extends Error {
   constructor() {
-    super("Login succeeded, but user profile could not be saved.");
+    super("Login succeeded, but no user profile was found.");
     this.name = "UserProfileSaveError";
   }
 }
 
-function logFirebaseError(error: unknown) {
-  if (error && typeof error === "object") {
-    const firebaseError = error as { code?: string; message?: string };
-    console.error("Firebase error:", {
-      code: firebaseError.code,
-      message: firebaseError.message,
-    });
-    return;
-  }
-
-  console.error("Firebase error:", error);
-}
-
-async function saveUserProfile(user: User): Promise<UserProfile> {
-  const userRef = doc(db, "users", user.uid);
-  const userSnapshot = await getDoc(userRef);
-  const existingProfile = userSnapshot.exists()
-    ? (userSnapshot.data() as Partial<UserProfile>)
-    : null;
-
-  const profileData = {
-    uid: user.uid,
-    displayName: user.displayName,
-    email: user.email,
-    photoURL: user.photoURL,
-    phoneNumber: user.phoneNumber,
-    role: existingProfile?.role ?? "customer",
-    createdAt: existingProfile?.createdAt ?? serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  };
-
-  await setDoc(userRef, profileData, { merge: true });
-
-  const updatedSnapshot = await getDoc(userRef);
-  return {
-    ...(updatedSnapshot.data() as UserProfile),
-  } as UserProfile;
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const [userProfile, setUserProfile] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    return onAuthStateChanged(auth, async (user) => {
       setLoading(true);
       setCurrentUser(user);
 
       try {
-        if (user) {
-          const profile = await saveUserProfile(user);
-          setUserProfile(profile);
-        } else {
-          setUserProfile(null);
-        }
+        setUserProfile(user ? await getUserProfile(user.uid) : null);
       } catch (error) {
-        logFirebaseError(error);
+        console.error("Unable to load user profile:", error);
         setUserProfile(null);
       } finally {
         setLoading(false);
       }
     });
-
-    return unsubscribe;
   }, []);
 
-  const loginWithGoogle = async () => {
-    const provider = new GoogleAuthProvider();
-    const credential = await signInWithPopup(auth, provider);
-    setCurrentUser(credential.user);
-
-    try {
-      const profile = await saveUserProfile(credential.user);
-      setUserProfile(profile);
-    } catch (error) {
-      logFirebaseError(error);
-      throw new UserProfileSaveError();
-    }
+  const register = async (input: RegisterUserInput) => {
+    const profile = await registerUser(input);
+    setCurrentUser(auth.currentUser);
+    setUserProfile(profile);
+    return profile;
   };
 
   const logout = async () => {
-    await signOut(auth);
+    await logoutUser();
     setCurrentUser(null);
     setUserProfile(null);
   };
 
+  const handleContinueWithGoogle = async () => {
+    const result = await continueWithGoogle();
+    setCurrentUser(result.user);
+    setUserProfile(result.profile);
+    return result;
+  };
+
+  const loginWithGoogle = async (role?: UserRole) => {
+    const profile = await loginWithGoogleUser(role);
+    setCurrentUser(auth.currentUser);
+    setUserProfile(profile);
+    return profile;
+  };
+
+  const selectRole = async (role: UserRole) => {
+    const profile = await getUserProfile(auth.currentUser!.uid);
+    if (!profile) throw new Error("No user profile was found for this account.");
+    const roles = profile.roles ?? [profile.role];
+    if (!roles.includes(role)) throw new Error(`This account does not have a ${role} profile.`);
+    const selectedProfile = { ...profile, role };
+    setUserProfile(selectedProfile);
+    return selectedProfile;
+  };
+
   const value = useMemo(
-    () => ({
-      currentUser,
-      userProfile,
-      loading,
-      loginWithGoogle,
-      logout,
-    }),
+    () => ({ currentUser, userProfile, loading, register, logout, continueWithGoogle: handleContinueWithGoogle, loginWithGoogle, selectRole }),
     [currentUser, userProfile, loading],
   );
 
@@ -155,10 +108,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-
-  if (!context) {
-    throw new Error("useAuth must be used within an AuthProvider");
-  }
-
+  if (!context) throw new Error("useAuth must be used within an AuthProvider");
   return context;
 }

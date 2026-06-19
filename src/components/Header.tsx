@@ -78,7 +78,7 @@ export default function Header() {
             )}
 
             <Link
-              to="/properties"
+              to="/properties.php"
               className="text-xs font-bold uppercase tracking-[0.2em] text-secondary-300 transition-colors hover:text-white"
             >
               Properties
@@ -150,7 +150,7 @@ export default function Header() {
             {currentUser ? (
               <div className="flex flex-col gap-4">
                 <Link
-                  to="/properties"
+                  to="/properties.php"
                   className="text-xs font-bold uppercase tracking-[0.2em] text-secondary-300 transition-colors hover:text-white"
                   onClick={() => setIsOpen(false)}
                 >
@@ -189,7 +189,7 @@ export default function Header() {
             ) : (
               <div className="flex flex-col gap-4">
                 <Link
-                  to="/properties"
+                  to="/properties.php"
                   className="text-xs font-bold uppercase tracking-[0.2em] text-secondary-300 transition-colors hover:text-white"
                   onClick={() => setIsOpen(false)}
                 >

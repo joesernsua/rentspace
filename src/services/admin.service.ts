@@ -4,7 +4,7 @@ import type { UserProfile } from "../context/AuthContext";
 import type { Appointment } from "../types/appointment";
 import type { Booking } from "../types/booking";
 import type { Enquiry } from "../types/enquiry";
-import type { Property } from "../types/property";
+import type { LegacyProperty as Property } from "../types/LegacyProperty";
 
 async function getCollectionItems<T>(collectionName: string): Promise<T[]> {
   const snapshot = await getDocs(collection(db, collectionName));

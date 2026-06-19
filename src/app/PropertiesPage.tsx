@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { getProperties } from "../services/property.service";
-import type { Property } from "../types/property";
+import type { LegacyProperty as Property } from "../types/LegacyProperty";
 
 const availabilityOptions = ["", "Available", "Unavailable", "Reserved"];
 

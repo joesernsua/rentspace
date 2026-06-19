@@ -16,7 +16,7 @@ import {
 import type { Appointment } from "../types/appointment";
 import type { Booking } from "../types/booking";
 import type { Enquiry } from "../types/enquiry";
-import type { Property } from "../types/property";
+import type { LegacyProperty as Property } from "../types/LegacyProperty";
 
 const initialPropertyForm = {
   propertyName: "",

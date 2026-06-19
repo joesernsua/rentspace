@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router";
 import { useAuth } from "../context/AuthContext";
 import { createBooking } from "../services/booking.service";
 import { getPropertyById } from "../services/property.service";
-import type { Property } from "../types/property";
+import type { LegacyProperty as Property } from "../types/LegacyProperty";
 
 const initialBookingForm = {
   bookingDate: "",

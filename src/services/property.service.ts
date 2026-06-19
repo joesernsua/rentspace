@@ -9,7 +9,7 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import { db } from "../config/firebase";
-import type { Property } from "../types/property";
+import type { LegacyProperty as Property } from "../types/LegacyProperty";
 
 type CreatePropertyData = Omit<Property, "id" | "createdAt" | "updatedAt">;
 type UpdatePropertyData = Partial<CreatePropertyData>;
