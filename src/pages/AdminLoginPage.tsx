@@ -5,10 +5,11 @@ import {
   signOut,
   type User,
 } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router";
 import { auth, db } from "../config/firebase";
+import { normalizeAdminInviteEmail } from "../services/adminService";
 import type { AppUser } from "../types/User";
 
 function isAdminProfile(profile: AppUser | null) {
@@ -23,6 +24,45 @@ async function getAdminProfile(uid: string) {
   if (!snapshot.exists()) return null;
   const data = snapshot.data() as AppUser;
   return { ...data, uid, roles: data.roles ?? [data.role] };
+}
+
+async function createAdminProfileFromInvite(user: User) {
+  if (!user.email) return null;
+
+  const email = normalizeAdminInviteEmail(user.email);
+  const inviteSnapshot = await getDoc(doc(db, "adminInvites", email));
+  if (!inviteSnapshot.exists()) return null;
+
+  const name = user.displayName || email.split("@")[0] || "Admin";
+  const profile = {
+    uid: user.uid,
+    name,
+    displayName: user.displayName ?? name,
+    email,
+    phone: user.phoneNumber ?? "",
+    role: "admin",
+    roles: ["admin"],
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  await setDoc(doc(db, "users", user.uid), profile);
+
+  try {
+    await updateDoc(doc(db, "adminInvites", email), {
+      status: "accepted",
+      usedBy: user.uid,
+      usedAt: serverTimestamp(),
+    });
+  } catch {
+    // The user profile is the source of truth after first login.
+  }
+
+  return {
+    ...profile,
+    createdAt: undefined,
+    updatedAt: undefined,
+  } as AppUser;
 }
 
 function getLoginError(error: unknown) {
@@ -54,14 +94,22 @@ export default function AdminLoginPage() {
         navigate("/admin-dashboard", { replace: true });
         return;
       }
+      const invitedProfile = await createAdminProfileFromInvite(user);
+      if (isAdminProfile(invitedProfile)) {
+        navigate("/admin-dashboard", { replace: true });
+        return;
+      }
       await signOut(auth);
     });
   }, [navigate]);
 
   const completeAdminLogin = async (user: User) => {
     const profile = await getAdminProfile(user.uid);
+    const invitedProfile = isAdminProfile(profile)
+      ? profile
+      : await createAdminProfileFromInvite(user);
 
-    if (!isAdminProfile(profile)) {
+    if (!isAdminProfile(invitedProfile)) {
       await signOut(auth);
       setError("Access denied. Admin account required.");
       return;

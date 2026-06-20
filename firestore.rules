@@ -17,7 +17,25 @@ service cloud.firestore {
     function isAdmin() {
       return signedIn()
         && exists(userDoc(request.auth.uid))
-        && get(userDoc(request.auth.uid)).data.role == 'admin';
+        && (
+          get(userDoc(request.auth.uid)).data.role == 'admin'
+          || get(userDoc(request.auth.uid)).data.roles.hasAny(['admin'])
+        );
+    }
+
+    function isBossAdmin() {
+      return isAdmin()
+        && request.auth.token.email == 'joesernsua@gmail.com';
+    }
+
+    function isInvitedAdminCreate(uid) {
+      return isSelf(uid)
+        && request.resource.data.uid == uid
+        && request.resource.data.role == 'admin'
+        && request.resource.data.roles.hasOnly(['admin'])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.name is string
+        && exists(/databases/$(database)/documents/adminInvites/$(request.resource.data.email));
     }
 
     function isTenant() {
@@ -39,12 +57,15 @@ service cloud.firestore {
     }
 
     match /users/{uid} {
-      allow create: if isSelf(uid)
-        && request.resource.data.uid == uid
-        && request.resource.data.role in ['tenant', 'owner']
-        && request.resource.data.roles.hasOnly(['tenant', 'owner'])
-        && request.resource.data.email is string
-        && request.resource.data.name is string;
+      allow create: if (
+          isSelf(uid)
+          && request.resource.data.uid == uid
+          && request.resource.data.role in ['tenant', 'owner']
+          && request.resource.data.roles.hasOnly(['tenant', 'owner'])
+          && request.resource.data.email is string
+          && request.resource.data.name is string
+        )
+        || isInvitedAdminCreate(uid);
 
       allow get: if isSelf(uid) || isAdmin();
       allow list: if isAdmin();
@@ -58,6 +79,12 @@ service cloud.firestore {
         );
 
       allow delete: if isAdmin();
+    }
+
+    match /adminInvites/{email} {
+      allow get: if isBossAdmin()
+        || (signedIn() && request.auth.token.email == email);
+      allow list, create, update, delete: if isBossAdmin();
     }
 
     match /properties/{propertyId} {

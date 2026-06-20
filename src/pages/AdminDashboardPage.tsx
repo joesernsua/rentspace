@@ -1,17 +1,22 @@
-﻿import { useEffect, useMemo, useState } from "react";
+﻿import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { signOut } from "firebase/auth";
 import { Link, useNavigate } from "react-router";
 import AdminRoleBadge, { getUserRoles } from "../components/AdminRoleBadge";
 import StatusBadge from "../components/StatusBadge";
 import { auth } from "../config/firebase";
 import {
+  addAdminInviteAsBoss,
   deleteRentalRequestAsAdmin,
   deletePropertyAsAdmin,
+  deleteAdminInviteAsBoss,
   getAllPaymentHistory,
+  getAllAdminInvitesAsAdmin,
   getAllProperties,
   getAllRentalRequests,
   getAllUsers,
+  normalizeAdminInviteEmail,
   updateRentalRequestStatusAsAdmin,
+  type AdminInvite,
 } from "../services/adminService";
 import type { PaymentHistory } from "../types/PaymentHistory";
 import type { Property } from "../types/Property";
@@ -183,29 +188,39 @@ function buildExcelWorkbook(sheets: ExcelSheet[]) {
 
 const navItems = [
   { id: "dashboard", label: "Overview", icon: "O", detail: "Platform summary" },
+  { id: "employees", label: "Employees", icon: "E", detail: "Staff list" },
   { id: "users", label: "Users", icon: "U", detail: "Account roles" },
   { id: "properties", label: "Properties", icon: "P", detail: "Listings control" },
   { id: "rental-requests", label: "Requests", icon: "R", detail: "Tenant demand" },
   { id: "payments", label: "Payments", icon: "$", detail: "Paid history" },
 ];
 
+const bossEmail = "joesernsua@gmail.com";
+
 export default function AdminDashboardPage() {
   const navigate = useNavigate();
+  const currentAdminEmail = auth.currentUser?.email?.toLowerCase() ?? "";
+  const isBossAccount = currentAdminEmail === bossEmail;
   const [activeSection, setActiveSection] = useState("dashboard");
   const [users, setUsers] = useState<AppUser[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
   const [requests, setRequests] = useState<RentalRequest[]>([]);
   const [payments, setPayments] = useState<PaymentHistory[]>([]);
+  const [adminInvites, setAdminInvites] = useState<AdminInvite[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
   const [propertiesLoading, setPropertiesLoading] = useState(true);
   const [requestsLoading, setRequestsLoading] = useState(true);
   const [paymentsLoading, setPaymentsLoading] = useState(true);
+  const [invitesLoading, setInvitesLoading] = useState(isBossAccount);
   const [usersError, setUsersError] = useState("");
   const [propertiesError, setPropertiesError] = useState("");
   const [requestsError, setRequestsError] = useState("");
   const [paymentsError, setPaymentsError] = useState("");
+  const [invitesError, setInvitesError] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [employeeEmail, setEmployeeEmail] = useState("");
+  const [addingEmployee, setAddingEmployee] = useState(false);
 
   useEffect(() => {
     getAllUsers()
@@ -233,6 +248,24 @@ export default function AdminDashboardPage() {
       .catch(() => setPaymentsError("Unable to load payment history."))
       .finally(() => setPaymentsLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!isBossAccount) {
+      setAdminInvites([]);
+      setInvitesLoading(false);
+      return;
+    }
+
+    setInvitesLoading(true);
+    getAllAdminInvitesAsAdmin()
+      .then((items) =>
+        setAdminInvites(
+          items.sort((first, second) => first.email.localeCompare(second.email)),
+        ),
+      )
+      .catch(() => setInvitesError("Unable to load employee invites."))
+      .finally(() => setInvitesLoading(false));
+  }, [isBossAccount]);
 
   const handleDelete = async (property: Property) => {
     if (!window.confirm(`Delete "${property.title}"? This cannot be undone.`)) return;
@@ -279,6 +312,63 @@ export default function AdminDashboardPage() {
     }
   };
 
+  const handleAddEmployee = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const normalizedEmail = normalizeAdminInviteEmail(employeeEmail);
+    const currentAdmin = auth.currentUser;
+
+    if (!currentAdmin) return;
+    if (!normalizedEmail) {
+      setInvitesError("Please enter an employee email.");
+      return;
+    }
+    if (normalizedEmail === bossEmail) {
+      setInvitesError("Boss account is already the main admin.");
+      return;
+    }
+    if (employees.some((employee) => employee.email.toLowerCase() === normalizedEmail)) {
+      setInvitesError("This employee already has an admin account.");
+      return;
+    }
+
+    setAddingEmployee(true);
+    setInvitesError("");
+    try {
+      await addAdminInviteAsBoss(normalizedEmail, currentAdmin.uid);
+      setAdminInvites((items) => {
+        const nextInvite: AdminInvite = {
+          id: normalizedEmail,
+          email: normalizedEmail,
+          status: "invited",
+          createdBy: currentAdmin.uid,
+        };
+        const withoutDuplicate = items.filter((item) => item.email !== normalizedEmail);
+        return [...withoutDuplicate, nextInvite].sort((first, second) =>
+          first.email.localeCompare(second.email),
+        );
+      });
+      setEmployeeEmail("");
+    } catch {
+      setInvitesError("Unable to add employee email.");
+    } finally {
+      setAddingEmployee(false);
+    }
+  };
+
+  const handleDeleteInvite = async (invite: AdminInvite) => {
+    if (!window.confirm(`Remove invite for "${invite.email}"?`)) return;
+    setDeletingId(invite.id);
+    setInvitesError("");
+    try {
+      await deleteAdminInviteAsBoss(invite.email);
+      setAdminInvites((items) => items.filter((item) => item.id !== invite.id));
+    } catch {
+      setInvitesError("Unable to remove employee invite.");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const handleAdminLogout = async () => {
     await signOut(auth);
     navigate("/admin-login", { replace: true });
@@ -303,6 +393,30 @@ export default function AdminDashboardPage() {
             getUserRoles(user).join(", "),
             user.phone || "-",
             formatDate(user.createdAt),
+          ]),
+      },
+      {
+        name: "Employees",
+        title: "Employees",
+        headers: ["UID", "Name", "Email", "Roles", "Phone", "Created"],
+        rows: employees.map((employee) => [
+            employee.uid,
+            employee.name || employee.displayName || "-",
+            employee.email,
+            getUserRoles(employee).join(", "),
+            employee.phone || "-",
+            formatDate(employee.createdAt),
+          ]),
+      },
+      {
+        name: "Employee Invites",
+        title: "Employee Invites",
+        headers: ["Email", "Status", "Created By", "Created"],
+        rows: adminInvites.map((invite) => [
+            invite.email,
+            invite.status,
+            invite.createdBy,
+            formatDate(invite.createdAt),
           ]),
       },
       {
@@ -424,7 +538,19 @@ export default function AdminDashboardPage() {
   const availableProperties = displayedProperties.filter((property) => property.displayStatus === "available").length;
   const totalMonthlyRent = properties.reduce((total, property) => total + (typeof property.price === "number" ? property.price : 0), 0);
   const paidRevenue = payments.reduce((total, payment) => total + (typeof payment.totalPaid === "number" ? payment.totalPaid : 0), 0);
-  const isLoading = usersLoading || propertiesLoading || requestsLoading || paymentsLoading;
+  const isLoading = usersLoading || propertiesLoading || requestsLoading || paymentsLoading || invitesLoading;
+  const visibleNavItems = navItems.filter((item) => item.id !== "employees" || isBossAccount);
+  const employees = users.filter(
+    (user) =>
+      user.email?.toLowerCase() !== bossEmail &&
+      getUserRoles(user).includes("admin"),
+  );
+  const registeredEmployeeEmails = new Set(
+    employees.map((employee) => employee.email.toLowerCase()),
+  );
+  const pendingAdminInvites = adminInvites.filter(
+    (invite) => !registeredEmployeeEmails.has(invite.email.toLowerCase()),
+  );
 
   const summaryCards = [
     { label: "Total users", value: usersLoading ? "-" : users.length.toLocaleString(), icon: "U", change: "+ active" },
@@ -503,7 +629,7 @@ export default function AdminDashboardPage() {
 
           <nav className="mt-6 space-y-2">
             <p className="mb-3 px-2 text-xs font-bold uppercase tracking-[0.18em] text-slate-600">Admin menu</p>
-            {navItems.map((item) => (
+            {visibleNavItems.map((item) => (
               <button
                 key={item.label}
                 type="button"
@@ -655,9 +781,9 @@ export default function AdminDashboardPage() {
             </>
           )}
 
-          {(usersError || propertiesError || requestsError || paymentsError) && (
+          {(usersError || propertiesError || requestsError || paymentsError || invitesError) && (
             <div className="mt-5 rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-200">
-              {[usersError, propertiesError, requestsError, paymentsError].filter(Boolean).join(" ")}
+              {[usersError, propertiesError, requestsError, paymentsError, invitesError].filter(Boolean).join(" ")}
             </div>
           )}
 
@@ -675,6 +801,114 @@ export default function AdminDashboardPage() {
                 <table className="w-full min-w-[860px] text-left text-sm">
                   <thead className="text-slate-500"><tr><th className="py-3 pr-5">Name</th><th className="py-3 pr-5">Email</th><th className="py-3 pr-5">Role</th><th className="py-3 pr-5">Created</th><th className="py-3 pr-5">Profile</th></tr></thead>
                   <tbody>{users.map((user) => <tr key={user.uid} className="border-t border-white/10"><td className="py-4 pr-5 font-semibold text-white">{user.name || user.displayName || "-"}</td><td className="py-4 pr-5 text-slate-300">{user.email}</td><td className="py-4 pr-5"><div className="flex flex-wrap gap-2">{getUserRoles(user).map((role) => <AdminRoleBadge key={role} role={role} />)}</div></td><td className="py-4 pr-5 text-slate-500">{formatDate(user.createdAt)}</td><td className="py-4 pr-5"><Link to={`/admin-users/${user.uid}`} className="inline-flex rounded-lg bg-emerald-400/10 px-3 py-2 font-semibold text-emerald-200 transition hover:bg-emerald-400/20">View profile</Link></td></tr>)}</tbody>
+                </table>
+              </div>
+            )}
+          </section>
+          )}
+
+          {activeSection === "employees" && isBossAccount && (
+          <section id="employees" className="mt-8 rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-black text-white">Employees</h2>
+                <p className="mt-1 text-sm text-slate-400">Add employee Gmail accounts, then they can login with Google and appear here after first login.</p>
+              </div>
+              <span className="rounded-full bg-emerald-400/10 px-3 py-1 text-sm font-bold text-emerald-200">{employees.length} employees</span>
+            </div>
+
+            <form onSubmit={handleAddEmployee} className="mt-6 grid gap-3 rounded-xl border border-white/10 bg-[#0b1024] p-4 sm:grid-cols-[1fr_auto]">
+              <label className="block text-sm font-bold text-slate-300">
+                Employee Gmail
+                <input
+                  required
+                  type="email"
+                  value={employeeEmail}
+                  onChange={(event) => setEmployeeEmail(event.target.value)}
+                  placeholder="employee@gmail.com"
+                  className="mt-2 w-full rounded-lg border border-white/10 bg-[#070b1d] px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-emerald-300 focus:ring-4 focus:ring-emerald-300/10"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={addingEmployee}
+                className="self-end rounded-lg bg-emerald-400 px-5 py-3 font-black text-[#07111f] transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {addingEmployee ? "Adding..." : "Add employee"}
+              </button>
+            </form>
+
+            <div className="mt-8 flex items-center justify-between">
+              <h3 className="text-sm font-black uppercase tracking-[0.2em] text-slate-400">Registered employees</h3>
+              <span className="rounded-full bg-white/5 px-3 py-1 text-xs font-bold text-slate-300">{employees.length} active</span>
+            </div>
+
+            {usersLoading ? <p className="mt-5 text-slate-400">Loading employees...</p> : employees.length === 0 ? <p className="mt-5 text-slate-400">No registered employees found yet.</p> : (
+              <div className="mt-5 overflow-x-auto">
+                <table className="w-full min-w-[940px] text-left text-sm">
+                  <thead className="text-slate-500">
+                    <tr>
+                      <th className="py-3 pr-5">Employee</th>
+                      <th className="py-3 pr-5">Email</th>
+                      <th className="py-3 pr-5">Phone</th>
+                      <th className="py-3 pr-5">Roles</th>
+                      <th className="py-3 pr-5">Created</th>
+                      <th className="py-3 pr-5">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {employees.map((employee) => (
+                      <tr key={employee.uid} className="border-t border-white/10">
+                        <td className="py-4 pr-5 font-semibold text-white">{employee.name || employee.displayName || "-"}</td>
+                        <td className="py-4 pr-5 text-slate-300">{employee.email}</td>
+                        <td className="py-4 pr-5 text-slate-300">{employee.phone || "-"}</td>
+                        <td className="py-4 pr-5"><div className="flex flex-wrap gap-2">{getUserRoles(employee).map((role) => <AdminRoleBadge key={role} role={role} />)}</div></td>
+                        <td className="py-4 pr-5 text-slate-500">{formatDate(employee.createdAt)}</td>
+                        <td className="py-4 pr-5"><Link to={`/admin-users/${employee.uid}`} className="inline-flex rounded-lg bg-emerald-400/10 px-3 py-2 font-semibold text-emerald-200 transition hover:bg-emerald-400/20">View profile</Link></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="mt-8 flex items-center justify-between">
+              <h3 className="text-sm font-black uppercase tracking-[0.2em] text-slate-400">Pending employee invites</h3>
+              <span className="rounded-full bg-amber-400/10 px-3 py-1 text-xs font-bold text-amber-200">{pendingAdminInvites.length} pending</span>
+            </div>
+
+            {invitesLoading ? <p className="mt-5 text-slate-400">Loading invites...</p> : pendingAdminInvites.length === 0 ? <p className="mt-5 text-slate-400">No pending employee invites.</p> : (
+              <div className="mt-5 overflow-x-auto">
+                <table className="w-full min-w-[720px] text-left text-sm">
+                  <thead className="text-slate-500">
+                    <tr>
+                      <th className="py-3 pr-5">Email</th>
+                      <th className="py-3 pr-5">Status</th>
+                      <th className="py-3 pr-5">Created</th>
+                      <th className="py-3 pr-5">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pendingAdminInvites.map((invite) => (
+                      <tr key={invite.id} className="border-t border-white/10">
+                        <td className="py-4 pr-5 font-semibold text-white">{invite.email}</td>
+                        <td className="py-4 pr-5">
+                          <span className="rounded-full bg-amber-400/10 px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-amber-200">Pending</span>
+                        </td>
+                        <td className="py-4 pr-5 text-slate-500">{formatDate(invite.createdAt)}</td>
+                        <td className="py-4 pr-5">
+                          <button
+                            type="button"
+                            disabled={deletingId === invite.id}
+                            onClick={() => void handleDeleteInvite(invite)}
+                            className="rounded-lg bg-red-500/10 px-3 py-2 font-semibold text-red-200 transition hover:bg-red-500/20 disabled:opacity-60"
+                          >
+                            {deletingId === invite.id ? "Removing..." : "Remove"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
                 </table>
               </div>
             )}

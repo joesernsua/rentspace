@@ -5,13 +5,29 @@ import {
   getDoc,
   getDocs,
   serverTimestamp,
+  setDoc,
   updateDoc,
+  type Timestamp,
 } from "firebase/firestore";
 import { db } from "../config/firebase";
 import type { PaymentHistory } from "../types/PaymentHistory";
 import type { Property, PropertyStatus } from "../types/Property";
 import type { RentalRequest, RentalRequestStatus } from "../types/RentalRequest";
 import type { AppUser } from "../types/User";
+
+export interface AdminInvite {
+  id: string;
+  email: string;
+  status: "invited";
+  createdBy: string;
+  createdAt?: Timestamp;
+  usedBy?: string;
+  usedAt?: Timestamp;
+}
+
+export function normalizeAdminInviteEmail(email: string) {
+  return email.trim().toLowerCase();
+}
 
 async function getCollectionItems<T>(collectionName: string): Promise<T[]> {
   const snapshot = await getDocs(collection(db, collectionName));
@@ -44,6 +60,27 @@ export function getAllRentalRequests(): Promise<RentalRequest[]> {
 
 export function getAllPaymentHistory(): Promise<PaymentHistory[]> {
   return getCollectionItems<PaymentHistory>("paymentHistory");
+}
+
+export function getAllAdminInvitesAsAdmin(): Promise<AdminInvite[]> {
+  return getCollectionItems<AdminInvite>("adminInvites");
+}
+
+export function addAdminInviteAsBoss(
+  email: string,
+  createdBy: string,
+): Promise<void> {
+  const normalizedEmail = normalizeAdminInviteEmail(email);
+  return setDoc(doc(db, "adminInvites", normalizedEmail), {
+    email: normalizedEmail,
+    status: "invited",
+    createdBy,
+    createdAt: serverTimestamp(),
+  });
+}
+
+export function deleteAdminInviteAsBoss(email: string): Promise<void> {
+  return deleteDoc(doc(db, "adminInvites", normalizeAdminInviteEmail(email)));
 }
 
 export function deletePropertyAsAdmin(propertyId: string): Promise<void> {
