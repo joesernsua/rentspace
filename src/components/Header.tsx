@@ -3,6 +3,8 @@ import { FiMenu, FiX } from "react-icons/fi";
 import { Link } from "react-router";
 import { UserProfileSaveError, useAuth } from "../context/AuthContext";
 
+const logoSrc = "/rentspace-logo.png";
+
 export default function Header() {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const { currentUser, userProfile, loading, loginWithGoogle, logout } =
@@ -64,9 +66,9 @@ export default function Header() {
         <div className="flex justify-between items-center h-16">
           <div className="flex items-center gap-3 cursor-pointer">
               <img
-                src="https://westfield.webfx.com.my/wp-content/webp-express/webp-images/uploads/2026/03/top-logo.png.webp"
-                alt="Company Logo"
-                className="w-24 object-contain"
+                src={logoSrc}
+                alt="RentSpace"
+                className="w-36 object-contain"
               />
           </div>
 

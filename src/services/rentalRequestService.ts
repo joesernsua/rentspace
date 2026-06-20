@@ -20,7 +20,12 @@ const requestsCollection = collection(db, "rentalRequests");
 function requestFromDocument(
   document: { id: string; data: () => Record<string, unknown> },
 ): RentalRequest {
-  return { id: document.id, ...document.data() } as RentalRequest;
+  const data = document.data();
+  return {
+    id: document.id,
+    contractYears: typeof data.contractYears === "number" ? data.contractYears : 1,
+    ...data,
+  } as RentalRequest;
 }
 
 export async function createRentalRequest(
@@ -80,6 +85,26 @@ export async function approveRentalRequestWithPayment(
       totalDue,
       status: "unpaid",
     },
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function markRentalRequestPaymentPaid(
+  requestId: string,
+): Promise<void> {
+  await updateDoc(doc(db, "rentalRequests", requestId), {
+    "payment.status": "paid",
+    "payment.paidAt": serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function updateRentalRequestMonthlyUtilities(
+  requestId: string,
+  monthlyUtilities: Record<string, number>,
+): Promise<void> {
+  await updateDoc(doc(db, "rentalRequests", requestId), {
+    "payment.monthlyUtilities": monthlyUtilities,
     updatedAt: serverTimestamp(),
   });
 }

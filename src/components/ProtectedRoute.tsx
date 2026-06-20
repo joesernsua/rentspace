@@ -13,6 +13,13 @@ export function getDashboardPath(role: UserRole) {
   return dashboardByRole[role];
 }
 
+function getPublicFallbackPath(userProfile: { role: UserRole; roles?: UserRole[] }) {
+  const roles = userProfile.roles ?? [userProfile.role];
+  if (roles.includes("tenant")) return dashboardByRole.tenant;
+  if (roles.includes("owner")) return dashboardByRole.owner;
+  return "/login.html";
+}
+
 export default function ProtectedRoute({
   role,
   children,
@@ -34,7 +41,7 @@ export default function ProtectedRoute({
   const roles = userProfile.roles ?? [userProfile.role];
 
   if (!roles.includes(role)) {
-    return <Navigate to={getDashboardPath(userProfile.role)} replace />;
+    return <Navigate to={getPublicFallbackPath(userProfile)} replace />;
   }
 
   return children;

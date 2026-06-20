@@ -1,46 +1,211 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
+import { signOut } from "firebase/auth";
+import { Link, useNavigate } from "react-router";
+import AdminRoleBadge, { getUserRoles } from "../components/AdminRoleBadge";
 import StatusBadge from "../components/StatusBadge";
+import { auth } from "../config/firebase";
 import {
+  deleteRentalRequestAsAdmin,
   deletePropertyAsAdmin,
+  getAllPaymentHistory,
   getAllProperties,
   getAllRentalRequests,
   getAllUsers,
+  updateRentalRequestStatusAsAdmin,
 } from "../services/adminService";
+import type { PaymentHistory } from "../types/PaymentHistory";
 import type { Property } from "../types/Property";
-import type { RentalRequest } from "../types/RentalRequest";
+import type { RentalRequest, RentalRequestStatus } from "../types/RentalRequest";
 import type { AppUser } from "../types/User";
 
-function formatDate(value: AppUser["createdAt"] | RentalRequest["createdAt"]) {
+function formatDate(
+  value: AppUser["createdAt"] | RentalRequest["createdAt"] | PaymentHistory["paidAt"],
+) {
   return value ? value.toDate().toLocaleDateString() : "-";
 }
 
-function formatPrice(value: Property["price"] | RentalRequest["propertyPrice"]) {
+function formatPrice(
+  value: Property["price"] | RentalRequest["propertyPrice"] | PaymentHistory["totalPaid"],
+) {
   return typeof value === "number" ? `RM ${value.toLocaleString()}` : "-";
+}
+
+function formatContractYears(years = 1) {
+  return `${years} year${years === 1 ? "" : "s"}`;
 }
 
 function percent(part: number, total: number) {
   return total > 0 ? Math.round((part / total) * 100) : 0;
 }
 
+function getDisplayedPropertyStatus(property: Property, requests: RentalRequest[]) {
+  const hasApprovedRental = requests.some(
+    (request) =>
+      request.propertyId === property.id &&
+      request.ownerId === property.ownerId &&
+      request.status === "approved",
+  );
+
+  return hasApprovedRental ? "rented" : property.status;
+}
+
+function getTimestampDate(
+  value:
+    | AppUser["createdAt"]
+    | RentalRequest["createdAt"]
+    | PaymentHistory["paidAt"]
+    | PaymentHistory["createdAt"],
+) {
+  return value?.toDate();
+}
+
+function getDateKey(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function getShortDateLabel(date: Date) {
+  return date.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+function downloadFile(filename: string, content: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function escapeExcelCell(value: unknown) {
+  return String(value ?? "-")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+type ExcelSheet = {
+  name: string;
+  title: string;
+  headers: string[];
+  rows: Array<Array<unknown>>;
+};
+
+function getExcelCellType(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? "Number" : "String";
+}
+
+function buildExcelRow(cells: Array<unknown>, styleId?: string) {
+  return `<Row>${cells
+    .map(
+      (cell) =>
+        `<Cell${styleId ? ` ss:StyleID="${styleId}"` : ""}><Data ss:Type="${getExcelCellType(cell)}">${escapeExcelCell(cell)}</Data></Cell>`,
+    )
+    .join("")}</Row>`;
+}
+
+function buildExcelWorksheet(sheet: ExcelSheet) {
+  return `
+    <Worksheet ss:Name="${escapeExcelCell(sheet.name)}">
+      <Table>
+        <Column ss:AutoFitWidth="1" ss:Width="170" />
+        <Column ss:AutoFitWidth="1" ss:Width="180" />
+        <Column ss:AutoFitWidth="1" ss:Width="190" />
+        <Column ss:AutoFitWidth="1" ss:Width="170" />
+        <Column ss:AutoFitWidth="1" ss:Width="120" />
+        <Column ss:AutoFitWidth="1" ss:Width="120" />
+        <Column ss:AutoFitWidth="1" ss:Width="180" />
+        <Column ss:AutoFitWidth="1" ss:Width="130" />
+        <Column ss:AutoFitWidth="1" ss:Width="130" />
+        ${buildExcelRow([sheet.title], "Title")}
+        ${buildExcelRow(sheet.headers, "Header")}
+        ${sheet.rows
+          .map((row, index) => buildExcelRow(row, index % 2 === 0 ? "EvenRow" : "OddRow"))
+          .join("")}
+      </Table>
+      <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
+        <FreezePanes />
+        <FrozenNoSplit />
+        <SplitHorizontal>2</SplitHorizontal>
+        <TopRowBottomPane>2</TopRowBottomPane>
+        <ActivePane>2</ActivePane>
+      </WorksheetOptions>
+    </Worksheet>
+  `;
+}
+
+function buildExcelWorkbook(sheets: ExcelSheet[]) {
+  return `
+    <?xml version="1.0"?>
+    <?mso-application progid="Excel.Sheet"?>
+    <Workbook
+      xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+      xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:x="urn:schemas-microsoft-com:office:excel"
+      xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+      xmlns:html="http://www.w3.org/TR/REC-html40">
+      <Styles>
+        <Style ss:ID="Title">
+          <Font ss:Bold="1" ss:Size="14" ss:Color="#FFFFFF" />
+          <Interior ss:Color="#111827" ss:Pattern="Solid" />
+          <Borders>
+            <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#0F172A" />
+          </Borders>
+        </Style>
+        <Style ss:ID="Header">
+          <Font ss:Bold="1" ss:Color="#FFFFFF" />
+          <Interior ss:Color="#2563EB" ss:Pattern="Solid" />
+          <Borders>
+            <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#1E3A8A" />
+            <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#93C5FD" />
+            <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#93C5FD" />
+            <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#93C5FD" />
+          </Borders>
+        </Style>
+        <Style ss:ID="EvenRow">
+          <Interior ss:Color="#EFF6FF" ss:Pattern="Solid" />
+          <Borders>
+            <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#BFDBFE" />
+          </Borders>
+        </Style>
+        <Style ss:ID="OddRow">
+          <Interior ss:Color="#FFFFFF" ss:Pattern="Solid" />
+          <Borders>
+            <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#DBEAFE" />
+          </Borders>
+        </Style>
+      </Styles>
+      ${sheets.map(buildExcelWorksheet).join("")}
+    </Workbook>
+  `;
+}
+
 const navItems = [
-  { label: "Dashboard", href: "#dashboard", icon: "D", active: true },
-  { label: "Reports", href: "#dashboard", icon: "R" },
-  { label: "Users", href: "#users", icon: "U" },
-  { label: "Properties", href: "#properties", icon: "P" },
-  { label: "Rental requests", href: "#rental-requests", icon: "Q" },
+  { id: "dashboard", label: "Overview", icon: "O", detail: "Platform summary" },
+  { id: "users", label: "Users", icon: "U", detail: "Account roles" },
+  { id: "properties", label: "Properties", icon: "P", detail: "Listings control" },
+  { id: "rental-requests", label: "Requests", icon: "R", detail: "Tenant demand" },
+  { id: "payments", label: "Payments", icon: "$", detail: "Paid history" },
 ];
 
 export default function AdminDashboardPage() {
+  const navigate = useNavigate();
+  const [activeSection, setActiveSection] = useState("dashboard");
   const [users, setUsers] = useState<AppUser[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
   const [requests, setRequests] = useState<RentalRequest[]>([]);
+  const [payments, setPayments] = useState<PaymentHistory[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
   const [propertiesLoading, setPropertiesLoading] = useState(true);
   const [requestsLoading, setRequestsLoading] = useState(true);
+  const [paymentsLoading, setPaymentsLoading] = useState(true);
   const [usersError, setUsersError] = useState("");
   const [propertiesError, setPropertiesError] = useState("");
   const [requestsError, setRequestsError] = useState("");
+  const [paymentsError, setPaymentsError] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
 
   useEffect(() => {
     getAllUsers()
@@ -55,6 +220,18 @@ export default function AdminDashboardPage() {
       .then(setRequests)
       .catch(() => setRequestsError("Unable to load rental requests."))
       .finally(() => setRequestsLoading(false));
+    getAllPaymentHistory()
+      .then((items) =>
+        setPayments(
+          items.sort(
+            (first, second) =>
+              (second.paidAt?.toMillis() ?? second.createdAt?.toMillis() ?? 0) -
+              (first.paidAt?.toMillis() ?? first.createdAt?.toMillis() ?? 0),
+          ),
+        ),
+      )
+      .catch(() => setPaymentsError("Unable to load payment history."))
+      .finally(() => setPaymentsLoading(false));
   }, []);
 
   const handleDelete = async (property: Property) => {
@@ -71,153 +248,420 @@ export default function AdminDashboardPage() {
     }
   };
 
+  const handleDeleteRequest = async (request: RentalRequest) => {
+    if (!window.confirm(`Delete request for "${request.propertyTitle}"? This cannot be undone.`)) return;
+    setDeletingId(request.id);
+    setRequestsError("");
+    try {
+      await deleteRentalRequestAsAdmin(request.id);
+      setRequests((items) => items.filter((item) => item.id !== request.id));
+    } catch {
+      setRequestsError("Unable to delete the rental request.");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleRejectRequest = async (request: RentalRequest) => {
+    setUpdatingId(request.id);
+    setRequestsError("");
+    try {
+      await updateRentalRequestStatusAsAdmin(request.id, "rejected");
+      setRequests((items) =>
+        items.map((item) =>
+          item.id === request.id ? { ...item, status: "rejected" as RentalRequestStatus } : item,
+        ),
+      );
+    } catch {
+      setRequestsError("Unable to reject the rental request.");
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const handleAdminLogout = async () => {
+    await signOut(auth);
+    navigate("/admin-login", { replace: true });
+  };
+
+  const handleSidebarNavigation = (sectionId: string) => {
+    setActiveSection(sectionId);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleExportData = () => {
+    const exportedAt = new Date().toISOString();
+    const workbook = buildExcelWorkbook([
+      {
+        name: "Users",
+        title: "Users",
+        headers: ["UID", "Name", "Email", "Roles", "Phone", "Created"],
+        rows: users.map((user) => [
+            user.uid,
+            user.name || user.displayName || "-",
+            user.email,
+            getUserRoles(user).join(", "),
+            user.phone || "-",
+            formatDate(user.createdAt),
+          ]),
+      },
+      {
+        name: "Properties",
+        title: "Properties",
+        headers: ["Property ID", "Title", "Location", "Type", "Price", "Status", "Owner ID"],
+        rows: displayedProperties.map((property) => [
+            property.id,
+            property.title,
+            property.location,
+            property.type,
+            property.price,
+            property.displayStatus,
+            property.ownerId,
+          ]),
+      },
+      {
+        name: "Rental Requests",
+        title: "Rental Requests",
+        headers: ["Request ID", "Property", "Tenant", "Email", "Price", "Contract", "Status", "Created"],
+        rows: requests.map((request) => [
+            request.id,
+            request.propertyTitle,
+            request.tenantName,
+            request.tenantEmail,
+            request.propertyPrice,
+            formatContractYears(request.contractYears),
+            request.status,
+            formatDate(request.createdAt),
+          ]),
+      },
+      {
+        name: "Payment History",
+        title: "Payment History",
+        headers: ["Payment ID", "Tenant", "Email", "Property", "Billing Period", "Payment Method", "Total Paid", "Status", "Paid Date"],
+        rows: payments.map((payment) => [
+            payment.id,
+            payment.tenantName,
+            payment.tenantEmail,
+            payment.propertyTitle,
+            payment.billingPeriod,
+            payment.paymentMethodType,
+            payment.totalPaid,
+            payment.status,
+            formatDate(payment.paidAt ?? payment.createdAt),
+          ]),
+      },
+      {
+        name: "Export Info",
+        title: "Export Info",
+        headers: ["Field", "Value"],
+        rows: [["Exported At", exportedAt]],
+      },
+    ]);
+
+    downloadFile(
+      `rentspace-admin-export-${exportedAt.slice(0, 10)}.xls`,
+      workbook,
+      "application/vnd.ms-excel;charset=utf-8",
+    );
+  };
+
+  const handleCreateReport = () => {
+    const reportDate = new Date();
+    const workbook = buildExcelWorkbook([
+      {
+        name: "Summary",
+        title: "Summary",
+        headers: ["Metric", "Value"],
+        rows: [
+            ["Generated", reportDate.toLocaleString()],
+            ["Users", users.length],
+            ["Properties", properties.length],
+            ["Rental Requests", requests.length],
+            ["Pending Requests", pendingRequests],
+            ["Approved Requests", approvedRequests],
+            ["Rejected Requests", requests.filter((request) => request.status === "rejected").length],
+            ["Available Properties", availableProperties],
+            ["Pending Properties", displayedProperties.filter((property) => property.displayStatus === "pending").length],
+            ["Rented Properties", displayedProperties.filter((property) => property.displayStatus === "rented").length],
+            ["Total Listed Rent", totalMonthlyRent],
+            ["Paid Revenue", paidRevenue],
+          ],
+      },
+      {
+        name: "Recent Payments",
+        title: "Recent Payments",
+        headers: ["Payment ID", "Tenant", "Property", "Billing Period", "Total Paid", "Paid Date"],
+        rows: payments.slice(0, 10).map((payment) => [
+            payment.id,
+            payment.tenantName,
+            payment.propertyTitle,
+            payment.billingPeriod,
+            payment.totalPaid,
+            formatDate(payment.paidAt ?? payment.createdAt),
+          ]),
+      },
+      {
+        name: "7 Days Activity",
+        title: "Last 7 Days Activity",
+        headers: ["Date", "Requests", "Payments", "Revenue"],
+        rows: dailyActivity.map((day) => [day.label, day.requests, day.payments, day.revenue]),
+      },
+    ]);
+
+    downloadFile(
+      `rentspace-admin-report-${reportDate.toISOString().slice(0, 10)}.xls`,
+      workbook,
+      "application/vnd.ms-excel;charset=utf-8",
+    );
+  };
+
   const pendingRequests = requests.filter((request) => request.status === "pending").length;
   const approvedRequests = requests.filter((request) => request.status === "approved").length;
-  const availableProperties = properties.filter((property) => property.status === "available").length;
+  const displayedProperties = properties.map((property) => ({
+    ...property,
+    displayStatus: getDisplayedPropertyStatus(property, requests),
+  }));
+  const availableProperties = displayedProperties.filter((property) => property.displayStatus === "available").length;
   const totalMonthlyRent = properties.reduce((total, property) => total + (typeof property.price === "number" ? property.price : 0), 0);
+  const paidRevenue = payments.reduce((total, payment) => total + (typeof payment.totalPaid === "number" ? payment.totalPaid : 0), 0);
+  const isLoading = usersLoading || propertiesLoading || requestsLoading || paymentsLoading;
 
   const summaryCards = [
     { label: "Total users", value: usersLoading ? "-" : users.length.toLocaleString(), icon: "U", change: "+ active" },
     { label: "Properties", value: propertiesLoading ? "-" : properties.length.toLocaleString(), icon: "P", change: `${availableProperties} available` },
     { label: "Requests", value: requestsLoading ? "-" : requests.length.toLocaleString(), icon: "R", change: `${pendingRequests} pending` },
-    { label: "Monthly rent", value: propertiesLoading ? "-" : formatPrice(totalMonthlyRent), icon: "$", change: "listed value" },
+    { label: "Paid revenue", value: paymentsLoading ? "-" : formatPrice(paidRevenue), icon: "$", change: `${payments.length} payments` },
   ];
 
-  const chartBars = useMemo(
-    () =>
-      Array.from({ length: 14 }, (_, index) => {
-        const propertyHeight = 32 + ((properties.length + index * 13) % 64);
-        const requestHeight = 28 + ((requests.length + index * 17) % 70);
-        return { propertyHeight, requestHeight };
-      }),
-    [properties.length, requests.length],
+  const dailyActivity = useMemo(
+    () => {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      return Array.from({ length: 7 }, (_, index) => {
+        const date = new Date(today);
+        date.setDate(today.getDate() - (6 - index));
+        const key = getDateKey(date);
+
+        const requestsCount = requests.filter((request) => {
+          const createdAt = getTimestampDate(request.createdAt);
+          return createdAt ? getDateKey(createdAt) === key : false;
+        }).length;
+
+        const dayPayments = payments.filter((payment) => {
+          const paidAt = getTimestampDate(payment.paidAt ?? payment.createdAt);
+          return paidAt ? getDateKey(paidAt) === key : false;
+        });
+
+        return {
+          key,
+          label: getShortDateLabel(date),
+          requests: requestsCount,
+          payments: dayPayments.length,
+          revenue: dayPayments.reduce((total, payment) => total + payment.totalPaid, 0),
+        };
+      });
+    },
+    [payments, requests],
   );
 
+  const maxDailyValue = Math.max(
+    1,
+    ...dailyActivity.flatMap((day) => [day.requests, day.payments]),
+  );
+  const maxDailyRevenue = Math.max(1, ...dailyActivity.map((day) => day.revenue));
+
+  const overviewRows = [
+    { label: "Tenant accounts", value: users.filter((user) => getUserRoles(user).includes("tenant")).length.toLocaleString(), section: "users" },
+    { label: "Owner accounts", value: users.filter((user) => getUserRoles(user).includes("owner")).length.toLocaleString(), section: "users" },
+    { label: "Approved requests", value: approvedRequests.toLocaleString(), section: "rental-requests" },
+    { label: "Total listed rent", value: formatPrice(totalMonthlyRent), section: "properties" },
+    { label: "Payments this week", value: dailyActivity.reduce((total, day) => total + day.payments, 0).toLocaleString(), section: "payments" },
+    { label: "Revenue this week", value: formatPrice(dailyActivity.reduce((total, day) => total + day.revenue, 0)), section: "payments" },
+  ];
+
   return (
-    <main className="min-h-[calc(100vh-145px)] bg-[#070b1d] text-slate-100">
-      <div className="grid min-h-[calc(100vh-145px)] lg:grid-cols-[19rem_1fr]">
-        <aside className="flex border-b border-white/10 bg-[#0b1024] p-6 lg:min-h-[calc(100vh-145px)] lg:flex-col lg:border-b-0 lg:border-r">
-          <div className="flex items-center gap-3">
-            <span className="relative grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br from-cyan-400 via-violet-400 to-fuchsia-500 text-lg font-black text-white shadow-lg shadow-fuchsia-500/20">
-              R
-              <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full bg-cyan-300 ring-4 ring-[#0b1024]" />
-            </span>
-            <div>
-              <p className="text-xl font-black tracking-tight text-white">RentSpace X</p>
-              <p className="text-xs text-slate-500">Admin control</p>
+    <main className="min-h-screen bg-[#070b1d] text-slate-100">
+      <div className="min-h-screen">
+        <aside className="flex border-b border-white/10 bg-[#080d20] p-6 lg:fixed lg:inset-y-0 lg:left-0 lg:w-72 lg:flex-col lg:border-b-0 lg:border-r lg:border-white/10">
+          <div className="rounded-[1.5rem] border border-white/10 bg-[#101834] p-5 shadow-xl shadow-black/10">
+            <div className="flex items-center gap-3">
+              <span className="relative grid h-12 w-12 place-items-center rounded-2xl bg-emerald-400 text-lg font-black text-[#07111f] shadow-lg shadow-emerald-400/20">
+                R
+                <span className="absolute -right-1 -top-1 h-3.5 w-3.5 rounded-full bg-cyan-300 ring-4 ring-[#101834]" />
+              </span>
+              <div>
+                <p className="text-lg font-black tracking-tight text-white">RentSpace Admin</p>
+                <p className="text-xs text-slate-500">Control center</p>
+              </div>
+            </div>
+            <div className="mt-5 rounded-2xl bg-[#080d20] p-4">
+              <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-300">Live system</p>
+              <p className="mt-2 text-sm text-slate-400">{users.length} users Â· {properties.length} listings</p>
             </div>
           </div>
 
-          <label className="mt-9 flex items-center gap-3 rounded-xl border border-[#26345f] bg-[#121a35] px-4 py-3 text-sm text-slate-400 shadow-inner shadow-black/10">
-            <span aria-hidden="true" className="grid h-5 w-5 place-items-center rounded-full border border-slate-600 text-[10px]">/</span>
-            <input className="w-full bg-transparent outline-none placeholder:text-slate-500" placeholder="Search for..." />
-          </label>
-
-          <nav className="mt-8 space-y-1">
-            <p className="mb-3 px-4 text-xs font-bold uppercase tracking-[0.18em] text-slate-600">All pages</p>
+          <nav className="mt-6 space-y-2">
+            <p className="mb-3 px-2 text-xs font-bold uppercase tracking-[0.18em] text-slate-600">Admin menu</p>
             {navItems.map((item) => (
-              <a
+              <button
                 key={item.label}
-                href={item.href}
-                className={`group flex items-center justify-between rounded-xl px-4 py-3 text-sm font-semibold transition ${
-                  item.active
-                    ? "bg-[#141d40] text-emerald-300 shadow-[inset_3px_0_0_#10b981]"
+                type="button"
+                onClick={() => handleSidebarNavigation(item.id)}
+                className={`group flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition ${
+                  activeSection === item.id
+                    ? "border-emerald-300/40 bg-emerald-400 text-[#07111f] shadow-lg shadow-emerald-400/10"
                     : "text-slate-400 hover:bg-white/5 hover:text-white"
                 }`}
               >
                 <span className="flex items-center gap-3">
                   <span className={`grid h-7 w-7 place-items-center rounded-lg text-xs font-black ${
-                    item.active ? "bg-emerald-400/15 text-emerald-300" : "bg-white/5 text-slate-500 group-hover:text-slate-300"
+                    activeSection === item.id ? "bg-[#07111f] text-emerald-300" : "bg-white/5 text-slate-500 group-hover:text-slate-300"
                   }`}>
                     {item.icon}
                   </span>
-                  {item.label}
+                  <span>
+                    <span className="block">{item.label}</span>
+                    <span className={`mt-0.5 block text-xs font-medium ${
+                      activeSection === item.id ? "text-[#07111f]/70" : "text-slate-600 group-hover:text-slate-400"
+                    }`}>
+                      {item.detail}
+                    </span>
+                  </span>
                 </span>
-                <span className="text-slate-600 transition group-hover:translate-x-0.5 group-hover:text-slate-300">&gt;</span>
-              </a>
+                <span className={activeSection === item.id ? "text-[#07111f]/60" : "text-slate-700"}>&gt;</span>
+              </button>
             ))}
           </nav>
+
+          <button
+            type="button"
+            onClick={() => void handleAdminLogout()}
+            className="mt-auto hidden rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-bold text-red-100 transition hover:bg-red-500/20 lg:block"
+          >
+            Logout admin
+          </button>
         </aside>
 
-        <section id="dashboard" className="overflow-hidden p-6 sm:p-8 lg:p-10">
+        <section id="dashboard" className="overflow-hidden p-6 sm:p-8 lg:ml-72 lg:p-10">
           <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h1 className="text-3xl font-black tracking-tight text-white">Welcome back, Admin</h1>
               <p className="mt-2 text-sm text-slate-400">Monitor users, properties, and rental activity across the platform.</p>
             </div>
             <div className="flex gap-3">
-              <button type="button" className="rounded-xl border border-white/10 bg-[#111936] px-4 py-3 text-sm font-bold text-slate-300 hover:bg-white/10">Export data</button>
-              <button type="button" className="rounded-xl bg-fuchsia-500 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-fuchsia-500/25 hover:bg-fuchsia-400">Create report</button>
+              <button type="button" onClick={handleExportData} disabled={isLoading} className="rounded-xl border border-white/10 bg-[#111936] px-4 py-3 text-sm font-bold text-slate-300 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60">Export data</button>
+              <button type="button" onClick={handleCreateReport} disabled={isLoading} className="rounded-xl bg-fuchsia-500 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-fuchsia-500/25 hover:bg-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-60">Create report</button>
+              <button type="button" onClick={() => void handleAdminLogout()} className="rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-bold text-red-100 hover:bg-red-500/20">Logout</button>
             </div>
           </div>
 
-          <section className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {summaryCards.map((summary) => (
-              <article key={summary.label} className="rounded-2xl border border-white/10 bg-[#101834] p-5 shadow-xl shadow-black/10">
-                <div className="flex items-center justify-between text-sm text-slate-400">
-                  <span className="flex items-center gap-2"><span>{summary.icon}</span>{summary.label}</span>
-                  <span>...</span>
-                </div>
-                <div className="mt-5 flex items-end gap-3">
-                  <p className="text-3xl font-black text-white">{summary.value}</p>
-                  <span className="rounded-md bg-emerald-400/10 px-2 py-1 text-xs font-bold text-emerald-300">{summary.change}</span>
-                </div>
-              </article>
-            ))}
-          </section>
-
-          <section className="mt-5 grid gap-5 xl:grid-cols-[1.7fr_0.9fr]">
-            <article className="rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <p className="text-sm font-bold text-slate-400">Total listed rent</p>
-                  <p className="mt-2 text-3xl font-black text-white">{formatPrice(totalMonthlyRent)}</p>
-                </div>
-                <div className="flex gap-4 text-xs font-semibold text-slate-400">
-                  <span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-fuchsia-400" /> Properties</span>
-                  <span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-cyan-400" /> Requests</span>
-                </div>
-              </div>
-              <div className="mt-10 h-64 rounded-2xl bg-[linear-gradient(180deg,rgba(217,70,239,0.12),transparent)] p-5">
-                <div className="flex h-full items-end gap-3">
-                  {chartBars.map((bar, index) => (
-                    <div key={index} className="flex flex-1 items-end justify-center gap-1">
-                      <span className="w-2 rounded-t-full bg-fuchsia-500" style={{ height: `${bar.propertyHeight}%` }} />
-                      <span className="w-2 rounded-t-full bg-cyan-400" style={{ height: `${bar.requestHeight}%` }} />
+          {activeSection === "dashboard" && (
+            <>
+              <section className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                {summaryCards.map((summary) => (
+                  <article key={summary.label} className="rounded-2xl border border-white/10 bg-[#101834] p-5 shadow-xl shadow-black/10">
+                    <div className="flex items-center justify-between text-sm text-slate-400">
+                      <span className="flex items-center gap-2"><span>{summary.icon}</span>{summary.label}</span>
+                      <span>...</span>
                     </div>
-                  ))}
-                </div>
-              </div>
-            </article>
+                    <div className="mt-5 flex items-end gap-3">
+                      <p className="text-3xl font-black text-white">{summary.value}</p>
+                      <span className="rounded-md bg-emerald-400/10 px-2 py-1 text-xs font-bold text-emerald-300">{summary.change}</span>
+                    </div>
+                  </article>
+                ))}
+              </section>
 
-            <div className="grid gap-5">
-              <article className="rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
-                <p className="text-sm font-bold text-slate-400">Request approval rate</p>
-                <p className="mt-2 text-3xl font-black text-white">{percent(approvedRequests, requests.length)}%</p>
-                <div className="mt-5 h-3 overflow-hidden rounded-full bg-white/10">
-                  <div className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-fuchsia-500" style={{ width: `${percent(approvedRequests, requests.length)}%` }} />
-                </div>
-                <p className="mt-4 text-sm text-slate-500">{approvedRequests} approved from {requests.length} total requests.</p>
-              </article>
+              <section className="mt-5 grid gap-5 xl:grid-cols-[1.7fr_0.9fr]">
+                <article className="rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-bold text-slate-400">Real activity from Firestore</p>
+                      <p className="mt-2 text-3xl font-black text-white">Last 7 days</p>
+                    </div>
+                    <div className="flex gap-4 text-xs font-semibold text-slate-400">
+                      <span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-cyan-400" /> Requests</span>
+                      <span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-fuchsia-400" /> Payments</span>
+                      <span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-emerald-400" /> Revenue</span>
+                    </div>
+                  </div>
+                  <div className="mt-8 bg-[#080d20] p-5">
+                    <div className="grid min-h-64 grid-cols-7 items-end gap-3">
+                      {dailyActivity.map((day) => (
+                        <div key={day.key} className="flex h-full min-w-0 flex-col justify-end gap-3">
+                          <div className="flex min-h-48 items-end justify-center gap-1 bg-white/[0.03] px-2 py-3">
+                            <span
+                              className="w-2 origin-bottom animate-[barGrow_700ms_ease-out_both] bg-cyan-400"
+                              title={`${day.requests} requests`}
+                              style={{ height: `${Math.max(8, (day.requests / maxDailyValue) * 100)}%` }}
+                            />
+                            <span
+                              className="w-2 origin-bottom animate-[barGrow_850ms_ease-out_both] bg-fuchsia-500"
+                              title={`${day.payments} payments`}
+                              style={{ height: `${Math.max(8, (day.payments / maxDailyValue) * 100)}%` }}
+                            />
+                            <span
+                              className="w-2 origin-bottom animate-[barGrow_1000ms_ease-out_both] bg-emerald-400"
+                              title={`${formatPrice(day.revenue)} revenue`}
+                              style={{ height: `${Math.max(8, (day.revenue / maxDailyRevenue) * 100)}%` }}
+                            />
+                          </div>
+                          <div className="text-center">
+                            <p className="truncate text-xs font-black text-slate-300">{day.label}</p>
+                            <p className="mt-1 text-[11px] font-semibold text-slate-500">{day.requests} req · {day.payments} paid</p>
+                            <p className="mt-1 truncate text-[11px] font-bold text-emerald-300">{formatPrice(day.revenue)}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                    {overviewRows.map((row) => (
+                      <button
+                        key={row.label}
+                        type="button"
+                        onClick={() => handleSidebarNavigation(row.section)}
+                        className="bg-white/[0.03] p-4 text-left transition hover:bg-white/[0.07] focus:outline-none focus:ring-2 focus:ring-emerald-300/40"
+                      >
+                        <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">{row.label}</p>
+                        <p className="mt-2 text-lg font-black text-white">{row.value}</p>
+                      </button>
+                    ))}
+                  </div>
+                </article>
 
-              <article className="rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
-                <p className="text-sm font-bold text-slate-400">Property availability</p>
-                <p className="mt-2 text-3xl font-black text-white">{percent(availableProperties, properties.length)}%</p>
-                <div className="mt-5 grid grid-cols-3 gap-2 text-center text-xs font-bold text-slate-400">
-                  <span className="rounded-xl bg-emerald-400/10 p-3 text-emerald-300">{availableProperties}<br />Available</span>
-                  <span className="rounded-xl bg-amber-400/10 p-3 text-amber-300">{properties.filter((item) => item.status === "pending").length}<br />Pending</span>
-                  <span className="rounded-xl bg-cyan-400/10 p-3 text-cyan-300">{properties.filter((item) => item.status === "rented").length}<br />Rented</span>
-                </div>
-              </article>
-            </div>
-          </section>
+                <div className="grid gap-5">
+                  <article className="rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
+                    <p className="text-sm font-bold text-slate-400">Request approval rate</p>
+                    <p className="mt-2 text-3xl font-black text-white">{percent(approvedRequests, requests.length)}%</p>
+                    <div className="mt-5 h-3 overflow-hidden rounded-full bg-white/10">
+                      <div className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-fuchsia-500" style={{ width: `${percent(approvedRequests, requests.length)}%` }} />
+                    </div>
+                    <p className="mt-4 text-sm text-slate-500">{approvedRequests} approved from {requests.length} total requests.</p>
+                  </article>
 
-          {(usersError || propertiesError || requestsError) && (
+                  <article className="rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
+                    <p className="text-sm font-bold text-slate-400">Property availability</p>
+                    <p className="mt-2 text-3xl font-black text-white">{percent(availableProperties, properties.length)}%</p>
+                    <div className="mt-5 grid grid-cols-3 gap-2 text-center text-xs font-bold text-slate-400">
+                      <span className="rounded-xl bg-emerald-400/10 p-3 text-emerald-300">{availableProperties}<br />Available</span>
+                      <span className="rounded-xl bg-amber-400/10 p-3 text-amber-300">{displayedProperties.filter((item) => item.displayStatus === "pending").length}<br />Pending</span>
+                      <span className="rounded-xl bg-cyan-400/10 p-3 text-cyan-300">{displayedProperties.filter((item) => item.displayStatus === "rented").length}<br />Rented</span>
+                    </div>
+                  </article>
+                </div>
+              </section>
+            </>
+          )}
+
+          {(usersError || propertiesError || requestsError || paymentsError) && (
             <div className="mt-5 rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-200">
-              {[usersError, propertiesError, requestsError].filter(Boolean).join(" ")}
+              {[usersError, propertiesError, requestsError, paymentsError].filter(Boolean).join(" ")}
             </div>
           )}
 
+          {activeSection === "users" && (
           <section id="users" className="mt-8 rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
             <div className="flex items-center justify-between">
               <div>
@@ -228,15 +672,17 @@ export default function AdminDashboardPage() {
             </div>
             {usersLoading ? <p className="mt-5 text-slate-400">Loading users...</p> : users.length === 0 ? <p className="mt-5 text-slate-400">No users found.</p> : (
               <div className="mt-5 overflow-x-auto">
-                <table className="w-full min-w-[680px] text-left text-sm">
-                  <thead className="text-slate-500"><tr><th className="py-3 pr-5">Name</th><th className="py-3 pr-5">Email</th><th className="py-3 pr-5">Role</th><th className="py-3 pr-5">Created</th></tr></thead>
-                  <tbody>{users.map((user) => <tr key={user.uid} className="border-t border-white/10"><td className="py-4 pr-5 font-semibold text-white">{user.name || user.displayName || "-"}</td><td className="py-4 pr-5 text-slate-300">{user.email}</td><td className="py-4 pr-5"><StatusBadge value={user.role} /></td><td className="py-4 pr-5 text-slate-500">{formatDate(user.createdAt)}</td></tr>)}</tbody>
+                <table className="w-full min-w-[860px] text-left text-sm">
+                  <thead className="text-slate-500"><tr><th className="py-3 pr-5">Name</th><th className="py-3 pr-5">Email</th><th className="py-3 pr-5">Role</th><th className="py-3 pr-5">Created</th><th className="py-3 pr-5">Profile</th></tr></thead>
+                  <tbody>{users.map((user) => <tr key={user.uid} className="border-t border-white/10"><td className="py-4 pr-5 font-semibold text-white">{user.name || user.displayName || "-"}</td><td className="py-4 pr-5 text-slate-300">{user.email}</td><td className="py-4 pr-5"><div className="flex flex-wrap gap-2">{getUserRoles(user).map((role) => <AdminRoleBadge key={role} role={role} />)}</div></td><td className="py-4 pr-5 text-slate-500">{formatDate(user.createdAt)}</td><td className="py-4 pr-5"><Link to={`/admin-users/${user.uid}`} className="inline-flex rounded-lg bg-emerald-400/10 px-3 py-2 font-semibold text-emerald-200 transition hover:bg-emerald-400/20">View profile</Link></td></tr>)}</tbody>
                 </table>
               </div>
             )}
           </section>
+          )}
 
-          <section id="properties" className="mt-5 rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
+          {activeSection === "properties" && (
+          <section id="properties" className="mt-8 rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-black text-white">Properties</h2>
@@ -248,13 +694,29 @@ export default function AdminDashboardPage() {
               <div className="mt-5 overflow-x-auto">
                 <table className="w-full min-w-[980px] text-left text-sm">
                   <thead className="text-slate-500"><tr><th className="py-3 pr-5">Title</th><th className="py-3 pr-5">Location</th><th className="py-3 pr-5">Price</th><th className="py-3 pr-5">Type</th><th className="py-3 pr-5">Status</th><th className="py-3 pr-5">Owner ID</th><th className="py-3 pr-5">Action</th></tr></thead>
-                  <tbody>{properties.map((property) => <tr key={property.id} className="border-t border-white/10"><td className="py-4 pr-5 font-semibold text-white">{property.title}</td><td className="py-4 pr-5 text-slate-300">{property.location}</td><td className="py-4 pr-5 text-slate-300">{formatPrice(property.price)}</td><td className="py-4 pr-5 text-slate-300">{property.type}</td><td className="py-4 pr-5"><StatusBadge value={property.status} /></td><td className="max-w-48 truncate py-4 pr-5 font-mono text-xs text-slate-500">{property.ownerId}</td><td className="py-4 pr-5"><button disabled={deletingId === property.id} type="button" onClick={() => void handleDelete(property)} className="rounded-lg bg-red-500/10 px-3 py-2 font-semibold text-red-200 hover:bg-red-500/20 disabled:opacity-60">{deletingId === property.id ? "Deleting..." : "Delete"}</button></td></tr>)}</tbody>
+                  <tbody>
+                    {displayedProperties.map((property) => (
+                      <tr key={property.id} className="border-t border-white/10">
+                        <td className="py-4 pr-5 font-semibold text-white">{property.title}</td>
+                        <td className="py-4 pr-5 text-slate-300">{property.location}</td>
+                        <td className="py-4 pr-5 text-slate-300">{formatPrice(property.price)}</td>
+                        <td className="py-4 pr-5 text-slate-300">{property.type}</td>
+                        <td className="py-4 pr-5">
+                          <StatusBadge value={property.displayStatus} />
+                        </td>
+                        <td className="max-w-48 truncate py-4 pr-5 font-mono text-xs text-slate-500">{property.ownerId}</td>
+                        <td className="py-4 pr-5"><button disabled={deletingId === property.id} type="button" onClick={() => void handleDelete(property)} className="rounded-lg bg-red-500/10 px-3 py-2 font-semibold text-red-200 hover:bg-red-500/20 disabled:opacity-60">{deletingId === property.id ? "Deleting..." : "Delete"}</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
                 </table>
               </div>
             )}
           </section>
+          )}
 
-          <section id="rental-requests" className="mt-5 rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
+          {activeSection === "rental-requests" && (
+          <section id="rental-requests" className="mt-8 rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-black text-white">Rental requests</h2>
@@ -264,13 +726,94 @@ export default function AdminDashboardPage() {
             </div>
             {requestsLoading ? <p className="mt-5 text-slate-400">Loading rental requests...</p> : requests.length === 0 ? <p className="mt-5 text-slate-400">No rental requests found.</p> : (
               <div className="mt-5 overflow-x-auto">
-                <table className="w-full min-w-[820px] text-left text-sm">
-                  <thead className="text-slate-500"><tr><th className="py-3 pr-5">Property</th><th className="py-3 pr-5">Tenant</th><th className="py-3 pr-5">Email</th><th className="py-3 pr-5">Price</th><th className="py-3 pr-5">Status</th><th className="py-3 pr-5">Created</th></tr></thead>
-                  <tbody>{requests.map((request) => <tr key={request.id} className="border-t border-white/10"><td className="py-4 pr-5 font-semibold text-white">{request.propertyTitle}</td><td className="py-4 pr-5 text-slate-300">{request.tenantName}</td><td className="py-4 pr-5 text-slate-300">{request.tenantEmail}</td><td className="py-4 pr-5 text-slate-300">{formatPrice(request.propertyPrice)}</td><td className="py-4 pr-5"><StatusBadge value={request.status} /></td><td className="py-4 pr-5 text-slate-500">{formatDate(request.createdAt)}</td></tr>)}</tbody>
+                <table className="w-full min-w-[1040px] text-left text-sm">
+                  <thead className="text-slate-500"><tr><th className="py-3 pr-5">Property</th><th className="py-3 pr-5">Tenant</th><th className="py-3 pr-5">Email</th><th className="py-3 pr-5">Price</th><th className="py-3 pr-5">Contract</th><th className="py-3 pr-5">Status</th><th className="py-3 pr-5">Created</th><th className="py-3 pr-5">Action</th></tr></thead>
+                  <tbody>
+                    {requests.map((request) => (
+                      <tr key={request.id} className="border-t border-white/10">
+                        <td className="py-4 pr-5 font-semibold text-white">{request.propertyTitle}</td>
+                        <td className="py-4 pr-5 text-slate-300">{request.tenantName}</td>
+                        <td className="py-4 pr-5 text-slate-300">{request.tenantEmail}</td>
+                        <td className="py-4 pr-5 text-slate-300">{formatPrice(request.propertyPrice)}</td>
+                        <td className="py-4 pr-5 text-slate-300">{formatContractYears(request.contractYears)}</td>
+                        <td className="py-4 pr-5"><StatusBadge value={request.status} /></td>
+                        <td className="py-4 pr-5 text-slate-500">{formatDate(request.createdAt)}</td>
+                        <td className="py-4 pr-5">
+                          <div className="flex flex-wrap gap-2">
+                            {request.status === "pending" && (
+                              <button
+                                disabled={updatingId === request.id}
+                                type="button"
+                                onClick={() => void handleRejectRequest(request)}
+                                className="rounded-lg bg-amber-500/10 px-3 py-2 font-semibold text-amber-200 hover:bg-amber-500/20 disabled:opacity-60"
+                              >
+                                Reject
+                              </button>
+                            )}
+                            <button
+                              disabled={deletingId === request.id}
+                              type="button"
+                              onClick={() => void handleDeleteRequest(request)}
+                              className="rounded-lg bg-red-500/10 px-3 py-2 font-semibold text-red-200 hover:bg-red-500/20 disabled:opacity-60"
+                            >
+                              {deletingId === request.id ? "Deleting..." : "Delete"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
                 </table>
               </div>
             )}
           </section>
+          )}
+
+          {activeSection === "payments" && (
+          <section id="payments" className="mt-8 rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-black text-white">Payments</h2>
+                <p className="mt-1 text-sm text-slate-400">Simulated payment records stored in Firestore.</p>
+              </div>
+              <span className="rounded-full bg-white/5 px-3 py-1 text-sm font-bold text-slate-300">{formatPrice(paidRevenue)} paid</span>
+            </div>
+            {paymentsLoading ? <p className="mt-5 text-slate-400">Loading payments...</p> : payments.length === 0 ? <p className="mt-5 text-slate-400">No payments found.</p> : (
+              <div className="mt-5 overflow-x-auto">
+                <table className="w-full min-w-[1220px] text-left text-sm">
+                  <thead className="text-slate-500">
+                    <tr>
+                      <th className="py-3 pr-5">Payment ID</th>
+                      <th className="py-3 pr-5">Tenant</th>
+                      <th className="py-3 pr-5">Email</th>
+                      <th className="py-3 pr-5">Property</th>
+                      <th className="py-3 pr-5">Billing Period</th>
+                      <th className="py-3 pr-5">Payment Method</th>
+                      <th className="py-3 pr-5">Total Paid</th>
+                      <th className="py-3 pr-5">Status</th>
+                      <th className="py-3 pr-5">Paid Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {payments.map((payment) => (
+                      <tr key={payment.id} className="border-t border-white/10">
+                        <td className="max-w-44 truncate py-4 pr-5 font-mono text-xs text-slate-500" title={payment.id}>{payment.id}</td>
+                        <td className="py-4 pr-5 font-semibold text-white">{payment.tenantName}</td>
+                        <td className="py-4 pr-5 text-slate-300">{payment.tenantEmail}</td>
+                        <td className="py-4 pr-5 text-slate-300">{payment.propertyTitle}</td>
+                        <td className="py-4 pr-5 text-slate-300">{payment.billingPeriod}</td>
+                        <td className="py-4 pr-5 text-slate-300">{payment.paymentMethodType}</td>
+                        <td className="py-4 pr-5 font-semibold text-white">{formatPrice(payment.totalPaid)}</td>
+                        <td className="py-4 pr-5"><StatusBadge value="approved" /></td>
+                        <td className="py-4 pr-5 text-slate-500">{formatDate(payment.paidAt ?? payment.createdAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+          )}
         </section>
       </div>
     </main>

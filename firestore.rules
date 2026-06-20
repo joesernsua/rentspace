@@ -86,7 +86,10 @@ service cloud.firestore {
     match /rentalRequests/{requestId} {
       allow create: if isTenant()
         && request.resource.data.tenantId == request.auth.uid
-        && request.resource.data.status == 'pending';
+        && request.resource.data.status == 'pending'
+        && request.resource.data.contractYears is number
+        && request.resource.data.contractYears >= 1
+        && request.resource.data.contractYears <= 5;
 
       allow get, list: if isAdmin()
         || (
@@ -104,9 +107,66 @@ service cloud.firestore {
           && request.resource.data.ownerId == resource.data.ownerId
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'payment', 'updatedAt'])
           && request.resource.data.status in ['approved', 'rejected']
+        )
+        || (
+          signedIn()
+          && resource.data.tenantId == request.auth.uid
+          && request.resource.data.tenantId == resource.data.tenantId
+          && request.resource.data.ownerId == resource.data.ownerId
+          && request.resource.data.status == resource.data.status
+          && resource.data.status == 'approved'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['payment', 'updatedAt'])
+          && resource.data.payment.status == 'unpaid'
+          && request.resource.data.payment.status == 'paid'
+          && request.resource.data.payment.rentDeposit == resource.data.payment.rentDeposit
+          && request.resource.data.payment.utilityDeposit == resource.data.payment.utilityDeposit
+          && request.resource.data.payment.monthlyRent == resource.data.payment.monthlyRent
+          && request.resource.data.payment.totalDue == resource.data.payment.totalDue
+          && request.resource.data.payment.diff(resource.data.payment).affectedKeys().hasOnly(['status', 'paidAt'])
         );
 
       allow delete: if isAdmin();
+    }
+
+    match /paymentMethods/{paymentMethodId} {
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.type in ['card', 'google-pay', 'fpx'];
+
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.userId == request.auth.uid);
+
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId == request.auth.uid
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.type in ['card', 'google-pay', 'fpx']
+        );
+
+      allow delete: if isAdmin()
+        || (signedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    match /paymentHistory/{paymentHistoryId} {
+      allow create: if signedIn()
+        && request.resource.data.tenantId == request.auth.uid
+        && request.resource.data.status == 'paid'
+        && request.resource.data.billingPeriod in ['initial', 'monthly']
+        && request.resource.data.paymentMethodType in ['card', 'google-pay', 'fpx']
+        && request.resource.data.totalPaid is number
+        && request.resource.data.totalPaid >= 0;
+
+      allow get, list: if isAdmin()
+        || (
+          signedIn()
+          && (
+            resource.data.tenantId == request.auth.uid
+            || resource.data.ownerId == request.auth.uid
+          )
+        );
+
+      allow update, delete: if isAdmin();
     }
 
     match /conversations/{conversationId} {

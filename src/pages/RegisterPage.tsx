@@ -6,6 +6,8 @@ import type { AppUser, UserRole } from "../types/User";
 
 type RegisterRole = Exclude<UserRole, "admin">;
 
+const logoSrc = "/rentspace-logo.png";
+
 function getErrorMessage(error: unknown) {
   const code = (error as { code?: string })?.code;
   if (code === "auth/popup-closed-by-user") return "Google sign up was cancelled.";
@@ -94,8 +96,8 @@ export default function RegisterPage() {
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.22),transparent_35%),radial-gradient(circle_at_bottom_right,rgba(79,70,229,0.28),transparent_40%)]" />
       <div className="relative grid min-h-[560px] w-full max-w-5xl overflow-hidden rounded-[2rem] border border-white/10 bg-white shadow-2xl sm:min-h-[620px] lg:grid-cols-[1fr_1.1fr]">
         <section className="hidden bg-slate-900 p-12 text-white lg:flex lg:flex-col lg:justify-between lg:p-14">
-          <Link to="/" className="flex items-center gap-3 text-sm font-black tracking-[0.2em] text-emerald-300">
-            <span className="brand-house" aria-hidden="true" /> RENTSPACE
+          <Link to="/" className="inline-flex w-fit items-center rounded-full bg-white px-5 py-3 shadow-lg shadow-black/20">
+            <img src={logoSrc} alt="RentSpace" className="h-7 w-auto object-contain" />
           </Link>
           <div>
             <p className="text-sm font-bold uppercase tracking-[0.25em] text-emerald-300">Join RentSpace</p>

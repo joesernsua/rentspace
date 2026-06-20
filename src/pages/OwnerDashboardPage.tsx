@@ -13,6 +13,7 @@ import {
   approveRentalRequestWithPayment,
   getOwnerRentalRequests,
   updateRentalRequestStatus,
+  updateRentalRequestMonthlyUtilities,
 } from "../services/rentalRequestService";
 import {
   propertyStatuses,
@@ -26,7 +27,10 @@ import type {
 } from "../types/RentalRequest";
 
 type FormData = Omit<CreatePropertyData, "ownerId">;
-type HostSection = "overview" | "properties" | "requests";
+type HostSection = "overview" | "properties" | "requests" | "rentals" | "payments";
+type ActiveRentalRequest = RentalRequest & {
+  payment: NonNullable<RentalRequest["payment"]>;
+};
 
 const emptyForm: FormData = {
   title: "",
@@ -57,10 +61,77 @@ const sidebarItems: Array<{
   { id: "overview", label: "Overview" },
   { id: "properties", label: "Properties" },
   { id: "requests", label: "Requests" },
+  { id: "rentals", label: "Rented Homes" },
+  { id: "payments", label: "Payment Records" },
 ];
 
 function formatPrice(price: number) {
   return `RM ${price.toLocaleString()}`;
+}
+
+function formatContractYears(years = 1) {
+  return `${years} year${years === 1 ? "" : "s"}`;
+}
+
+function formatDate(date: Date) {
+  return date.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatShortDate(date: Date) {
+  return date.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  });
+}
+
+function addOneMonth(date: Date) {
+  const targetMonth = date.getMonth() + 1;
+  const lastDayOfTargetMonth = new Date(date.getFullYear(), targetMonth + 1, 0).getDate();
+  return new Date(
+    date.getFullYear(),
+    targetMonth,
+    Math.min(date.getDate(), lastDayOfTargetMonth),
+  );
+}
+
+function getDateFromTimestamp(value: RentalRequest["updatedAt"]) {
+  return value?.toDate?.();
+}
+
+function addMonths(date: Date, months: number) {
+  const targetMonth = date.getMonth() + months;
+  const lastDayOfTargetMonth = new Date(date.getFullYear(), targetMonth + 1, 0).getDate();
+  return new Date(
+    date.getFullYear(),
+    targetMonth,
+    Math.min(date.getDate(), lastDayOfTargetMonth),
+  );
+}
+
+function getNextBillingInfo(request: ActiveRentalRequest) {
+  const paidDate = getDateFromTimestamp(request.payment.paidAt);
+
+  return {
+    date: addOneMonth(paidDate ?? new Date()),
+    detail: paidDate ? "From paid date" : "If paid today",
+  };
+}
+
+function getBillingPeriodLabel(request: ActiveRentalRequest, monthNumber: number) {
+  const startDate = addMonths(
+    getDateFromTimestamp(request.payment.paidAt) ?? getDateFromTimestamp(request.updatedAt) ?? new Date(),
+    monthNumber - 1,
+  );
+  const endDate = addMonths(startDate, 1);
+  return `${formatShortDate(startDate)} to ${formatShortDate(endDate)}`;
+}
+
+function isActiveRentalRequest(request: RentalRequest): request is ActiveRentalRequest {
+  return request.status === "approved" && Boolean(request.payment);
 }
 
 function getSavePropertyErrorMessage(error: unknown, action: "create" | "update") {
@@ -105,6 +176,10 @@ export default function OwnerDashboardPage() {
     utilityDeposit: "",
     monthlyRent: "",
   });
+  const [utilitiesRequest, setUtilitiesRequest] = useState<ActiveRentalRequest | null>(null);
+  const [utilitiesForm, setUtilitiesForm] = useState<Record<string, string>>({});
+  const [savingUtilities, setSavingUtilities] = useState(false);
+  const [utilitiesError, setUtilitiesError] = useState("");
 
   const loadProperties = useCallback(async () => {
     if (!currentUser) return;
@@ -153,22 +228,54 @@ export default function OwnerDashboardPage() {
     }, 50);
   }, [location.hash]);
 
-  const stats = useMemo(() => {
-    const available = properties.filter((property) => property.status === "available").length;
-    const rented = properties.filter((property) => property.status === "rented").length;
-    const pendingRequests = requests.filter((request) => request.status === "pending").length;
-    const monthlyRent = properties.reduce(
-      (sum, property) => sum + (property.status === "rented" ? property.price : 0),
+  const activeRentals = useMemo(
+    () => requests.filter(isActiveRentalRequest),
+    [requests],
+  );
+
+  const rentalSummary = useMemo(() => {
+    const monthlyIncome = activeRentals.reduce(
+      (sum, request) => sum + request.payment.monthlyRent,
       0,
     );
+    const upfrontCollected = activeRentals.reduce(
+      (sum, request) => sum + request.payment.rentDeposit + request.payment.utilityDeposit,
+      0,
+    );
+    const paidRentals = activeRentals.filter((request) => request.payment.status === "paid").length;
+    const unpaidRentals = activeRentals.length - paidRentals;
+    const paidInitialAmount = activeRentals.reduce(
+      (sum, request) => sum + (request.payment.status === "paid" ? request.payment.totalDue : 0),
+      0,
+    );
+    const unpaidInitialAmount = activeRentals.reduce(
+      (sum, request) => sum + (request.payment.status === "unpaid" ? request.payment.totalDue : 0),
+      0,
+    );
+    const averageRent = activeRentals.length ? Math.round(monthlyIncome / activeRentals.length) : 0;
+
+    return {
+      monthlyIncome,
+      upfrontCollected,
+      paidRentals,
+      unpaidRentals,
+      paidInitialAmount,
+      unpaidInitialAmount,
+      averageRent,
+    };
+  }, [activeRentals]);
+
+  const stats = useMemo(() => {
+    const available = properties.filter((property) => property.status === "available").length;
+    const pendingRequests = requests.filter((request) => request.status === "pending").length;
 
     return [
       { label: "Total listings", value: properties.length.toLocaleString(), detail: `${available} available` },
       { label: "Pending requests", value: pendingRequests.toLocaleString(), detail: "Need review" },
-      { label: "Active rentals", value: rented.toLocaleString(), detail: "Marked rented" },
-      { label: "Monthly rent", value: formatPrice(monthlyRent), detail: "From rented listings" },
+      { label: "Active rentals", value: activeRentals.length.toLocaleString(), detail: "Approved rentals" },
+      { label: "Monthly rent", value: formatPrice(rentalSummary.monthlyIncome), detail: "Expected income" },
     ];
-  }, [properties, requests]);
+  }, [activeRentals.length, properties, rentalSummary.monthlyIncome, requests]);
 
   const requestGroups = useMemo(
     () =>
@@ -177,6 +284,17 @@ export default function OwnerDashboardPage() {
         requests: requests.filter((request) => request.propertyId === property.id),
       })),
     [properties, requests],
+  );
+
+  const propertyImageById = useMemo(
+    () =>
+      new Map(
+        properties.map((property) => [
+          property.id,
+          getPropertyCoverImage(property),
+        ]),
+      ),
+    [properties],
   );
 
   const setField = <K extends keyof FormData>(field: K, value: FormData[K]) => {
@@ -328,6 +446,67 @@ export default function OwnerDashboardPage() {
     }
   };
 
+  const openUtilitiesModal = (request: ActiveRentalRequest) => {
+    setUtilitiesRequest(request);
+    setUtilitiesError("");
+    setUtilitiesForm(
+      Object.fromEntries(
+        Array.from({ length: Math.max(request.contractYears, 1) * 12 }, (_, index) => {
+          const monthNumber = String(index + 1);
+          const amount = request.payment.monthlyUtilities?.[monthNumber];
+          return [monthNumber, typeof amount === "number" ? String(amount) : ""];
+        }),
+      ),
+    );
+  };
+
+  const handleSaveUtilities = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!utilitiesRequest) return;
+
+    const nextUtilities: Record<string, number> = {};
+    for (const [monthNumber, amount] of Object.entries(utilitiesForm)) {
+      if (!amount.trim()) continue;
+      const numericAmount = Number(amount);
+      if (!Number.isFinite(numericAmount) || numericAmount < 0) {
+        setUtilitiesError("Please enter valid utilities amounts.");
+        return;
+      }
+      nextUtilities[monthNumber] = Math.round(numericAmount * 100) / 100;
+    }
+
+    setSavingUtilities(true);
+    setUtilitiesError("");
+    try {
+      await updateRentalRequestMonthlyUtilities(utilitiesRequest.id, nextUtilities);
+      setRequests((items) =>
+        items.map((request) =>
+          request.id === utilitiesRequest.id && request.payment
+            ? {
+                ...request,
+                payment: {
+                  ...request.payment,
+                  monthlyUtilities: nextUtilities,
+                },
+              }
+            : request,
+        ),
+      );
+      setUtilitiesRequest(null);
+      setUtilitiesForm({});
+      void loadRequests();
+    } catch (error) {
+      const code = (error as { code?: string })?.code;
+      setUtilitiesError(
+        code === "permission-denied"
+          ? "Permission denied. Please publish the updated Firestore rules before saving utilities."
+          : "Unable to save utilities. Please try again.",
+      );
+    } finally {
+      setSavingUtilities(false);
+    }
+  };
+
   const inputClass = "mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 dark:border-white/10 dark:bg-slate-950/60 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-emerald-400 dark:focus:ring-emerald-400/20";
   const labelClass = "text-sm font-semibold text-slate-700 dark:text-slate-300";
   const optionClass = "bg-slate-950 text-white";
@@ -336,14 +515,14 @@ export default function OwnerDashboardPage() {
   const isAddPropertyOnly = location.hash === "#add-property" && isPropertyFormOpen && !editingId;
 
   return (
-    <main className="mx-auto min-h-[calc(100vh-145px)] max-w-[96rem] px-4 pb-20 pt-8 text-slate-950 dark:text-white sm:px-6">
+    <main className="mx-auto min-h-[calc(100vh-145px)] max-w-[112rem] px-4 pb-20 pt-8 text-slate-950 dark:text-white sm:px-6">
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
         <aside className="h-fit rounded-[2rem] border border-slate-200 bg-white p-4 shadow-xl shadow-slate-900/10 dark:border-white/10 dark:bg-slate-900/80 dark:shadow-black/20 lg:sticky lg:top-32">
           <div className="rounded-3xl bg-slate-950 p-5 text-white dark:bg-white/5">
             <p className="text-xs font-black uppercase tracking-[0.3em] text-emerald-300">Host menu</p>
             <h1 className="mt-3 text-2xl font-black">Host Dashboard</h1>
             <p className="mt-2 text-sm leading-6 text-slate-400">
-              Your owner workspace, split into three clean sections.
+              Your owner workspace, split into rental-ready sections.
             </p>
           </div>
 
@@ -642,11 +821,12 @@ export default function OwnerDashboardPage() {
                           <p className="p-4 text-sm text-slate-500 dark:text-slate-400">No requests for this property yet.</p>
                         ) : (
                           <div className="overflow-x-auto">
-                            <table className="min-w-[1080px] table-fixed divide-y divide-slate-200 text-sm dark:divide-white/10 xl:min-w-full">
+                            <table className="min-w-[1180px] table-fixed divide-y divide-slate-200 text-sm dark:divide-white/10 xl:min-w-full">
                               <thead className="bg-white dark:bg-slate-900/40">
                                 <tr className="text-left text-xs font-black uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                                   <th className="w-[190px] px-4 py-3">Tenant</th>
-                                  <th className="w-[420px] px-4 py-3">Message</th>
+                                  <th className="w-[330px] px-4 py-3">Message</th>
+                                  <th className="w-[130px] px-4 py-3">Contract</th>
                                   <th className="w-[140px] px-4 py-3">Status</th>
                                   <th className="w-[190px] px-4 py-3">Action</th>
                                   <th className="w-[130px] px-4 py-3">Chat</th>
@@ -663,6 +843,9 @@ export default function OwnerDashboardPage() {
                                       <p className="truncate" title={request.message || "No message provided."}>
                                         {request.message || "No message provided."}
                                       </p>
+                                    </td>
+                                    <td className="px-4 py-4 align-top font-bold text-slate-950 dark:text-white">
+                                      {formatContractYears(request.contractYears)}
                                     </td>
                                     <td className="px-4 py-4 align-top">
                                       <StatusBadge value={request.status} />
@@ -693,6 +876,308 @@ export default function OwnerDashboardPage() {
               )}
             </section>
           )}
+
+          {activeSection === "rentals" && (
+            <section className={`${panelClass} p-6`}>
+              <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-black">Rented Homes</h2>
+                  <p className="mt-1 text-slate-600 dark:text-slate-400">
+                    Track homes that are already rented out and the monthly billing amount for each tenant.
+                  </p>
+                </div>
+                <span className="rounded-full bg-emerald-50 px-3 py-1 text-sm font-bold text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300">
+                  {activeRentals.length} active rental{activeRentals.length === 1 ? "" : "s"}
+                </span>
+              </div>
+
+              {requestsLoading ? (
+                <p className="mt-5 text-slate-600 dark:text-slate-400">Loading rented homes...</p>
+              ) : requestsError ? (
+                <p role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700 dark:border-red-400/20 dark:bg-red-500/10 dark:text-red-200">{requestsError}</p>
+              ) : activeRentals.length === 0 ? (
+                <div className={`mt-5 ${mutedCardClass}`}>
+                  <p>No rented homes yet.</p>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection("requests")}
+                    className="mt-4 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-black text-slate-950 transition hover:bg-emerald-400"
+                  >
+                    Review requests
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-6 space-y-6">
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    <article className="rounded-2xl border border-slate-200 bg-slate-50 p-5 dark:border-white/10 dark:bg-white/5">
+                      <p className="text-sm font-bold text-slate-500 dark:text-slate-400">Monthly income</p>
+                      <p className="mt-3 text-3xl font-black">{formatPrice(rentalSummary.monthlyIncome)}</p>
+                      <p className="mt-2 text-sm text-emerald-600 dark:text-emerald-300">Expected every month</p>
+                    </article>
+                    <article className="rounded-2xl border border-slate-200 bg-slate-50 p-5 dark:border-white/10 dark:bg-white/5">
+                      <p className="text-sm font-bold text-slate-500 dark:text-slate-400">Active rentals</p>
+                      <p className="mt-3 text-3xl font-black">{activeRentals.length}</p>
+                      <p className="mt-2 text-sm text-emerald-600 dark:text-emerald-300">Approved tenants</p>
+                    </article>
+                    <article className="rounded-2xl border border-slate-200 bg-slate-50 p-5 dark:border-white/10 dark:bg-white/5">
+                      <p className="text-sm font-bold text-slate-500 dark:text-slate-400">Payment completed</p>
+                      <p className="mt-3 text-3xl font-black">{rentalSummary.paidRentals}</p>
+                      <p className="mt-2 text-sm text-emerald-600 dark:text-emerald-300">Initial payment paid</p>
+                    </article>
+                    <article className="rounded-2xl border border-slate-200 bg-slate-50 p-5 dark:border-white/10 dark:bg-white/5">
+                      <p className="text-sm font-bold text-slate-500 dark:text-slate-400">Upfront amount</p>
+                      <p className="mt-3 text-3xl font-black">{formatPrice(rentalSummary.upfrontCollected)}</p>
+                      <p className="mt-2 text-sm text-emerald-600 dark:text-emerald-300">Deposit + utility</p>
+                    </article>
+                  </div>
+
+                  <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-white/10">
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[1240px] table-fixed text-left text-sm">
+                        <colgroup>
+                          <col className="w-[25%]" />
+                          <col className="w-[16%]" />
+                          <col className="w-[10%]" />
+                          <col className="w-[12%]" />
+                          <col className="w-[11%]" />
+                          <col className="w-[10%]" />
+                          <col className="w-[13%]" />
+                          <col className="w-[6%]" />
+                        </colgroup>
+                        <thead className="bg-slate-50 text-xs font-black uppercase tracking-[0.18em] text-slate-500 dark:bg-white/5 dark:text-slate-400">
+                          <tr>
+                            <th className="px-4 py-4">Property</th>
+                            <th className="px-4 py-4">Tenant</th>
+                            <th className="px-4 py-4">Contract</th>
+                            <th className="px-4 py-4">Monthly bill</th>
+                            <th className="px-4 py-4">Utilities</th>
+                            <th className="px-4 py-4">Payment</th>
+                            <th className="px-4 py-4">Next billing</th>
+                            <th className="px-4 py-4">Chat</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 dark:divide-white/10">
+                          {activeRentals.map((rental) => {
+                            const rentalImageUrl = rental.propertyImageUrl || propertyImageById.get(rental.propertyId);
+                            const billingInfo = getNextBillingInfo(rental);
+
+                            return (
+                              <tr key={rental.id} className="align-middle transition hover:bg-slate-50/70 dark:hover:bg-white/[0.03]">
+                                <td className="px-4 py-4">
+                                  <div className="flex min-w-0 items-center gap-4">
+                                    <div className="h-20 w-24 shrink-0 overflow-hidden rounded-2xl bg-slate-100 dark:bg-slate-800">
+                                      {rentalImageUrl ? (
+                                        <img src={rentalImageUrl} alt={rental.propertyTitle} className="h-full w-full object-cover" />
+                                      ) : (
+                                        <div className="grid h-full place-items-center text-xs font-bold text-slate-400">No image</div>
+                                      )}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <h3 className="truncate text-base font-black text-slate-950 dark:text-white">{rental.propertyTitle}</h3>
+                                      <p className="mt-1 truncate text-sm text-slate-600 dark:text-slate-400">{rental.propertyLocation}</p>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-4">
+                                  <p className="font-bold text-slate-950 dark:text-white">{rental.tenantName}</p>
+                                  <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{rental.tenantEmail}</p>
+                                </td>
+                                <td className="px-4 py-4 font-bold text-slate-950 dark:text-white">
+                                  {formatContractYears(rental.contractYears)}
+                                </td>
+                                <td className="px-4 py-4 font-black text-slate-950 dark:text-white">
+                                  {formatPrice(rental.payment.monthlyRent)}
+                                </td>
+                                <td className="px-4 py-4">
+                                  <button
+                                    type="button"
+                                    onClick={() => openUtilitiesModal(rental)}
+                                    className="whitespace-nowrap rounded-lg bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-200 dark:bg-white/10 dark:text-slate-200 dark:hover:bg-white/15"
+                                  >
+                                    Update
+                                  </button>
+                                </td>
+                                <td className="px-4 py-4">
+                                  <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ring-1 ${
+                                    rental.payment.status === "paid"
+                                      ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-400/10 dark:text-emerald-300 dark:ring-emerald-300/20"
+                                      : "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-400/10 dark:text-amber-300 dark:ring-amber-300/20"
+                                  }`}>
+                                    {rental.payment.status === "paid" ? "Paid" : "Unpaid"}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-4">
+                                  <p className="font-bold text-slate-950 dark:text-white">{formatDate(billingInfo.date)}</p>
+                                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{billingInfo.detail}</p>
+                                </td>
+                                <td className="px-4 py-4">
+                                  <Link to={`/chat?conversation=${getConversationId(rental.propertyId, rental.tenantId, rental.ownerId)}`} className="inline-flex whitespace-nowrap rounded-lg bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-200 dark:hover:bg-indigo-500/20">Chat</Link>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
+          {activeSection === "payments" && (
+            <section className={`${panelClass} p-6`}>
+              <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-black">Payment Records</h2>
+                  <p className="mt-1 text-slate-600 dark:text-slate-400">
+                    Check which rented homes have completed their initial payment and which ones are still pending.
+                  </p>
+                </div>
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-bold text-slate-700 dark:bg-white/10 dark:text-slate-200">
+                  {rentalSummary.paidRentals} paid / {rentalSummary.unpaidRentals} unpaid
+                </span>
+              </div>
+
+              {requestsLoading ? (
+                <p className="mt-5 text-slate-600 dark:text-slate-400">Loading payment records...</p>
+              ) : requestsError ? (
+                <p role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700 dark:border-red-400/20 dark:bg-red-500/10 dark:text-red-200">{requestsError}</p>
+              ) : activeRentals.length === 0 ? (
+                <div className={`mt-5 ${mutedCardClass}`}>
+                  <p>No payment records yet. Approve a rental request with payment details first.</p>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection("requests")}
+                    className="mt-4 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-black text-slate-950 transition hover:bg-emerald-400"
+                  >
+                    Go to requests
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-6 space-y-6">
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    <article className="rounded-2xl border border-slate-200 bg-emerald-50 p-5 dark:border-emerald-300/20 dark:bg-emerald-400/10">
+                      <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300">Paid homes</p>
+                      <p className="mt-3 text-3xl font-black text-slate-950 dark:text-white">{rentalSummary.paidRentals}</p>
+                      <p className="mt-2 text-sm text-emerald-700 dark:text-emerald-300">{formatPrice(rentalSummary.paidInitialAmount)} received</p>
+                    </article>
+                    <article className="rounded-2xl border border-slate-200 bg-amber-50 p-5 dark:border-amber-300/20 dark:bg-amber-400/10">
+                      <p className="text-sm font-bold text-amber-700 dark:text-amber-300">Unpaid homes</p>
+                      <p className="mt-3 text-3xl font-black text-slate-950 dark:text-white">{rentalSummary.unpaidRentals}</p>
+                      <p className="mt-2 text-sm text-amber-700 dark:text-amber-300">{formatPrice(rentalSummary.unpaidInitialAmount)} pending</p>
+                    </article>
+                    <article className="rounded-2xl border border-slate-200 bg-slate-50 p-5 dark:border-white/10 dark:bg-white/5">
+                      <p className="text-sm font-bold text-slate-500 dark:text-slate-400">Monthly rent total</p>
+                      <p className="mt-3 text-3xl font-black">{formatPrice(rentalSummary.monthlyIncome)}</p>
+                      <p className="mt-2 text-sm text-emerald-600 dark:text-emerald-300">All active rentals</p>
+                    </article>
+                    <article className="rounded-2xl border border-slate-200 bg-slate-50 p-5 dark:border-white/10 dark:bg-white/5">
+                      <p className="text-sm font-bold text-slate-500 dark:text-slate-400">Average rent</p>
+                      <p className="mt-3 text-3xl font-black">{formatPrice(rentalSummary.averageRent)}</p>
+                      <p className="mt-2 text-sm text-emerald-600 dark:text-emerald-300">Per home</p>
+                    </article>
+                  </div>
+
+                  <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-white/10">
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[1240px] table-fixed text-left text-sm">
+                        <colgroup>
+                          <col className="w-[22%]" />
+                          <col className="w-[15%]" />
+                          <col className="w-[8%]" />
+                          <col className="w-[10%]" />
+                          <col className="w-[10%]" />
+                          <col className="w-[10%]" />
+                          <col className="w-[8%]" />
+                          <col className="w-[12%]" />
+                          <col className="w-[5%]" />
+                        </colgroup>
+                        <thead className="bg-slate-50 text-xs font-black uppercase tracking-[0.18em] text-slate-500 dark:bg-white/5 dark:text-slate-400">
+                          <tr>
+                            <th className="px-4 py-4">Home</th>
+                            <th className="px-4 py-4">Tenant</th>
+                            <th className="px-4 py-4">Contract</th>
+                            <th className="px-4 py-4">Initial due</th>
+                            <th className="px-4 py-4">Monthly rent</th>
+                            <th className="px-4 py-4">Utilities</th>
+                            <th className="px-4 py-4">Status</th>
+                            <th className="px-4 py-4">Next billing</th>
+                            <th className="px-4 py-4">Chat</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 dark:divide-white/10">
+                          {activeRentals.map((record) => {
+                            const rentalImageUrl = record.propertyImageUrl || propertyImageById.get(record.propertyId);
+                            const isPaid = record.payment.status === "paid";
+                            const billingInfo = getNextBillingInfo(record);
+
+                            return (
+                              <tr key={record.id} className="align-middle transition hover:bg-slate-50/70 dark:hover:bg-white/[0.03]">
+                                <td className="px-4 py-4">
+                                  <div className="flex min-w-0 items-center gap-4">
+                                    <div className="h-16 w-20 shrink-0 overflow-hidden rounded-2xl bg-slate-100 dark:bg-slate-800">
+                                      {rentalImageUrl ? (
+                                        <img src={rentalImageUrl} alt={record.propertyTitle} className="h-full w-full object-cover" />
+                                      ) : (
+                                        <div className="grid h-full place-items-center text-xs font-bold text-slate-400">No image</div>
+                                      )}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <h3 className="truncate font-black text-slate-950 dark:text-white">{record.propertyTitle}</h3>
+                                      <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{record.propertyLocation}</p>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-4">
+                                  <p className="font-bold text-slate-950 dark:text-white">{record.tenantName}</p>
+                                  <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{record.tenantEmail}</p>
+                                </td>
+                                <td className="px-4 py-4 font-bold text-slate-950 dark:text-white">
+                                  {formatContractYears(record.contractYears)}
+                                </td>
+                                <td className="px-4 py-4 font-black text-slate-950 dark:text-white">
+                                  {formatPrice(record.payment.totalDue)}
+                                </td>
+                                <td className="px-4 py-4 font-black text-slate-950 dark:text-white">
+                                  {formatPrice(record.payment.monthlyRent)}
+                                </td>
+                                <td className="px-4 py-4">
+                                  <button
+                                    type="button"
+                                    onClick={() => openUtilitiesModal(record)}
+                                    className="whitespace-nowrap rounded-lg bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-200 dark:bg-white/10 dark:text-slate-200 dark:hover:bg-white/15"
+                                  >
+                                    Update
+                                  </button>
+                                </td>
+                                <td className="px-4 py-4">
+                                  <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ring-1 ${
+                                    isPaid
+                                      ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-400/10 dark:text-emerald-300 dark:ring-emerald-300/20"
+                                      : "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-400/10 dark:text-amber-300 dark:ring-amber-300/20"
+                                  }`}>
+                                    {isPaid ? "Paid" : "Unpaid"}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-4">
+                                  <p className="font-bold text-slate-950 dark:text-white">{formatDate(billingInfo.date)}</p>
+                                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{billingInfo.detail}</p>
+                                </td>
+                                <td className="px-4 py-4">
+                                  <Link to={`/chat?conversation=${getConversationId(record.propertyId, record.tenantId, record.ownerId)}`} className="inline-flex whitespace-nowrap rounded-lg bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-200 dark:hover:bg-indigo-500/20">Chat</Link>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
         </div>
       </div>
       {paymentRequest && (
@@ -704,6 +1189,9 @@ export default function OwnerDashboardPage() {
                 <h2 className="mt-3 text-2xl font-black">Approve rental request</h2>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
                   Set the payment amount for {paymentRequest.tenantName}. The tenant will see this after approval.
+                </p>
+                <p className="mt-3 inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300">
+                  Contract: {formatContractYears(paymentRequest.contractYears)}
                 </p>
               </div>
               <button
@@ -737,7 +1225,7 @@ export default function OwnerDashboardPage() {
                 />
               </label>
               <label className={labelClass}>
-                Monthly rent
+                First month rent
                 <input
                   type="number"
                   min="0"
@@ -758,6 +1246,86 @@ export default function OwnerDashboardPage() {
               >
                 {updatingRequestId === paymentRequest.id ? "Approving..." : "Approve and send payment"}
               </button>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {utilitiesRequest && (
+        <div className="fixed inset-0 z-[90] grid place-items-center bg-slate-950/80 px-4 py-8 backdrop-blur-sm">
+          <section className="max-h-[88vh] w-full max-w-3xl overflow-hidden rounded-[2rem] border border-slate-200 bg-white text-slate-950 shadow-2xl shadow-black/30 dark:border-white/10 dark:bg-slate-900 dark:text-white">
+            <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 p-6 dark:border-white/10">
+              <div>
+                <p className="text-sm font-black uppercase tracking-[0.3em] text-emerald-500 dark:text-emerald-300">Utilities setup</p>
+                <h2 className="mt-3 text-2xl font-black">{utilitiesRequest.propertyTitle}</h2>
+                <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+                  Key in monthly utilities here. Tenant payment will only show utilities after you save an amount.
+                </p>
+                <p className="mt-3 text-sm font-bold text-slate-500 dark:text-slate-400">
+                  Tenant: {utilitiesRequest.tenantName} · Contract: {formatContractYears(utilitiesRequest.contractYears)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setUtilitiesRequest(null);
+                  setUtilitiesForm({});
+                  setUtilitiesError("");
+                }}
+                className="rounded-full border border-slate-300 px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/10"
+              >
+                Close
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveUtilities}>
+              <div className="max-h-[52vh] overflow-y-auto p-6">
+                {utilitiesError && (
+                  <p role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700 dark:border-red-400/20 dark:bg-red-500/10 dark:text-red-200">
+                    {utilitiesError}
+                  </p>
+                )}
+
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {Array.from({ length: Math.max(utilitiesRequest.contractYears, 1) * 12 }, (_, index) => {
+                    const monthNumber = String(index + 1);
+                    const billingPeriod = getBillingPeriodLabel(utilitiesRequest, index + 1);
+
+                    return (
+                      <label key={monthNumber} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-black text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-200">
+                        {billingPeriod}
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={utilitiesForm[monthNumber] ?? ""}
+                          onChange={(event) =>
+                            setUtilitiesForm((current) => ({
+                              ...current,
+                              [monthNumber]: event.target.value,
+                            }))
+                          }
+                          placeholder="Not set"
+                          className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 dark:border-white/10 dark:bg-slate-950/60 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-emerald-400 dark:focus:ring-emerald-400/20"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-200 p-6 dark:border-white/10">
+                <p className="text-sm font-bold text-slate-500 dark:text-slate-400">
+                  Empty months stay hidden from tenant utilities payment.
+                </p>
+                <button
+                  type="submit"
+                  disabled={savingUtilities}
+                  className="rounded-2xl bg-emerald-600 px-6 py-3 font-black text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                >
+                  {savingUtilities ? "Saving..." : "Save utilities"}
+                </button>
+              </div>
             </form>
           </section>
         </div>

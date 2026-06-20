@@ -43,6 +43,7 @@ export default function PropertyDetailsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [contractYears, setContractYears] = useState(1);
   const [requestMessage, setRequestMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [startingChat, setStartingChat] = useState(false);
@@ -116,6 +117,7 @@ export default function PropertyDetailsPage() {
         tenantId: currentUser.uid,
         tenantName: userProfile.name,
         tenantEmail: userProfile.email,
+        contractYears,
         message: trimmedMessage,
       });
       const conversationId = await startPropertyConversation({
@@ -364,6 +366,20 @@ export default function PropertyDetailsPage() {
                 <p className="mt-5 rounded-2xl bg-slate-50 p-4 text-sm text-slate-700 dark:bg-white/5 dark:text-slate-300">Only tenants can apply for rentals.</p>
               ) : (
                 <form onSubmit={handleRequest} className="mt-5">
+                  <label className="mb-4 block text-sm font-bold text-slate-700 dark:text-slate-300">
+                    Contract length
+                    <select
+                      value={contractYears}
+                      onChange={(event) => setContractYears(Number(event.target.value))}
+                      className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-slate-950/70 dark:text-white"
+                    >
+                      {[1, 2, 3, 4, 5].map((years) => (
+                        <option key={years} value={years} className="bg-slate-950 text-white">
+                          {years} year{years === 1 ? "" : "s"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <label className="block text-sm font-bold text-slate-700 dark:text-slate-300">
                     Message to owner
                     <textarea

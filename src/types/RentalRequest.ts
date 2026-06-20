@@ -14,14 +14,17 @@ export interface RentalRequest {
   tenantId: string;
   tenantName: string;
   tenantEmail: string;
+  contractYears: number;
   message: string;
   status: RentalRequestStatus;
   payment?: {
     rentDeposit: number;
     utilityDeposit: number;
     monthlyRent: number;
+    monthlyUtilities?: Record<string, number>;
     totalDue: number;
     status: "unpaid" | "paid";
+    paidAt?: Timestamp;
   };
   createdAt?: Timestamp;
   updatedAt?: Timestamp;

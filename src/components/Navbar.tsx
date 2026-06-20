@@ -11,6 +11,8 @@ const publicLinks = [
   { label: "Properties", to: "/properties.php" },
 ];
 
+const logoSrc = "/rentspace-logo.png";
+
 type NavItem = {
   label: string;
   to: string;
@@ -34,6 +36,7 @@ export default function Navbar() {
     return window.matchMedia("(prefers-color-scheme: dark)").matches;
   });
   const isLoggedIn = Boolean(currentUser && userProfile);
+  const googlePhotoUrl = currentUser?.photoURL;
   const userRoles = userProfile?.roles ?? (userProfile ? [userProfile.role] : []);
   const hasOwnerDashboard = userRoles.includes("owner");
   const hasTenantDashboard = userRoles.includes("tenant");
@@ -41,8 +44,8 @@ export default function Navbar() {
     ? [
         ...publicLinks,
         ...(hasTenantDashboard ? [{ label: "Request", to: getDashboardPath("tenant") }] : []),
+        ...(hasTenantDashboard ? [{ label: "My Rentals", to: "/my-rentals" }] : []),
         ...(hasOwnerDashboard ? [{ label: "Host Dashboard", to: getDashboardPath("owner"), variant: "host" as const }] : []),
-        ...(!hasTenantDashboard && !hasOwnerDashboard ? [{ label: "Dashboard", to: getDashboardPath(userProfile!.role) }] : []),
       ]
     : publicLinks;
 
@@ -88,10 +91,9 @@ export default function Navbar() {
         <NavLink
           to="/"
           aria-label="RentSpace home"
-          className="flex min-h-12 shrink-0 items-center gap-3 rounded-full bg-emerald-400 px-5 text-sm font-black tracking-[0.18em] text-slate-950 shadow-lg shadow-emerald-500/20 transition-transform hover:scale-[1.02] sm:px-6"
+          className="flex min-h-12 shrink-0 items-center rounded-full bg-emerald-400 px-5 shadow-lg shadow-emerald-500/20 transition-transform hover:scale-[1.02] sm:px-6"
         >
-          <span className="brand-house" aria-hidden="true" />
-          <span>RENTSPACE</span>
+          <img src={logoSrc} alt="RentSpace" className="h-6 w-auto object-contain sm:h-7" />
         </NavLink>
 
         <div className="order-3 flex w-full flex-wrap items-center justify-center gap-1 px-1 sm:order-2 sm:min-w-0 sm:flex-1 sm:gap-2 sm:px-3">
@@ -169,11 +171,20 @@ export default function Navbar() {
 
           {isLoggedIn && userProfile && (
             <div
-              className="grid h-11 w-11 place-items-center rounded-full border border-emerald-300/40 bg-gradient-to-br from-emerald-300 to-cyan-500 text-xs font-black text-slate-950 shadow-lg shadow-cyan-500/10"
+              className="grid h-11 w-11 place-items-center overflow-hidden rounded-full border border-emerald-300/40 bg-gradient-to-br from-emerald-300 to-cyan-500 text-xs font-black text-slate-950 shadow-lg shadow-cyan-500/10"
               title={`${userProfile.name || userProfile.email} · ${userProfile.role}`}
               aria-label={`${userProfile.name || userProfile.email}, ${userProfile.role}`}
             >
-              {getInitials(userProfile.name, userProfile.email)}
+              {googlePhotoUrl ? (
+                <img
+                  src={googlePhotoUrl}
+                  alt={userProfile.name || userProfile.email || "Google profile"}
+                  className="h-full w-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                getInitials(userProfile.name, userProfile.email)
+              )}
             </div>
           )}
 

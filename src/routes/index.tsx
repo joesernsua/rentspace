@@ -1,11 +1,15 @@
 import { createBrowserRouter, Navigate, useLocation } from "react-router";
 import App from "../App";
+import AdminProtectedRoute from "../components/AdminProtectedRoute";
 import ProtectedRoute from "../components/ProtectedRoute";
 import AdminDashboardPage from "../pages/AdminDashboardPage";
+import AdminLoginPage from "../pages/AdminLoginPage";
+import AdminUserProfilePage from "../pages/AdminUserProfilePage";
 import ChatPage from "../pages/ChatPage";
 import FavoritesPage from "../pages/FavoritesPage";
 import HomePage from "../pages/HomePage";
 import LoginPage from "../pages/LoginPage";
+import MyRentalsPage from "../pages/MyRentalsPage";
 import OwnerDashboardPage from "../pages/OwnerDashboardPage";
 import PropertyDetailsPage from "../pages/PropertyDetailsPage";
 import PropertyListingPage from "../pages/PropertyListingPage";
@@ -35,6 +39,22 @@ const router = createBrowserRouter([
     element: <RegisterPage />,
   },
   {
+    path: "/admin-login",
+    element: <AdminLoginPage />,
+  },
+  {
+    path: "/admin-login.html",
+    element: <AdminLoginPage />,
+  },
+  {
+    path: "/admin-dashboard",
+    element: <AdminProtectedRoute><AdminDashboardPage /></AdminProtectedRoute>,
+  },
+  {
+    path: "/admin-users/:uid",
+    element: <AdminProtectedRoute><AdminUserProfilePage /></AdminProtectedRoute>,
+  },
+  {
     path: "/",
     element: <App />,
     children: [
@@ -59,12 +79,12 @@ const router = createBrowserRouter([
         element: <ProtectedRoute role="tenant"><TenantDashboardPage /></ProtectedRoute>,
       },
       {
-        path: "owner-dashboard",
-        element: <ProtectedRoute role="owner"><OwnerDashboardPage /></ProtectedRoute>,
+        path: "my-rentals",
+        element: <ProtectedRoute role="tenant"><MyRentalsPage /></ProtectedRoute>,
       },
       {
-        path: "admin-dashboard",
-        element: <ProtectedRoute role="admin"><AdminDashboardPage /></ProtectedRoute>,
+        path: "owner-dashboard",
+        element: <ProtectedRoute role="owner"><OwnerDashboardPage /></ProtectedRoute>,
       },
     ],
   },

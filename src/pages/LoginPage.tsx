@@ -4,6 +4,8 @@ import { getDashboardPath } from "../components/ProtectedRoute";
 import { useAuth } from "../context/AuthContext";
 import type { UserRole } from "../types/User";
 
+const logoSrc = "/rentspace-logo.png";
+
 function getErrorMessage(error: unknown) {
   const code = (error as { code?: string })?.code;
   if (code === "auth/popup-closed-by-user") return "Google login was cancelled.";
@@ -16,8 +18,15 @@ function getPostAuthPath(role: UserRole) {
   return role === "tenant" ? "/dashboard.html" : getDashboardPath(role);
 }
 
+function getPublicRoles(profile: { role: UserRole; roles?: UserRole[] }) {
+  const roles = profile.roles ?? [profile.role];
+  return roles.filter((role): role is Exclude<UserRole, "admin"> =>
+    role === "tenant" || role === "owner",
+  );
+}
+
 export default function LoginPage() {
-  const { loginWithGoogle, selectRole, userProfile, loading } = useAuth();
+  const { loginWithGoogle, logout, selectRole, userProfile, loading } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
@@ -27,18 +36,27 @@ export default function LoginPage() {
   if (loading) {
     return <main className="grid min-h-screen place-items-center bg-slate-950 text-slate-300">Checking your session...</main>;
   }
-  if (userProfile) return <Navigate to={getDashboardPath(userProfile.role)} replace />;
+  if (userProfile) {
+    const publicRoles = getPublicRoles(userProfile);
+    if (publicRoles.length > 0) {
+      return <Navigate to={getPostAuthPath(publicRoles[0])} replace />;
+    }
+  }
 
   const handleGoogleLogin = async () => {
     setError("");
     setSubmitting(true);
     try {
       const profile = await loginWithGoogle();
-      const roles = profile.roles ?? [profile.role];
-      if (roles.length > 1) {
+      const roles = getPublicRoles(profile);
+      if (roles.length === 0) {
+        await logout();
+        setError("This account only has admin access. Please use the Admin Portal.");
+      } else if (roles.length > 1) {
         setRoleChoices(roles);
       } else {
-        navigate(getPostAuthPath(profile.role), { replace: true });
+        const selectedProfile = await selectRole(roles[0]);
+        navigate(getPostAuthPath(selectedProfile.role), { replace: true });
       }
     } catch (loginError) {
       setError(getErrorMessage(loginError));
@@ -71,8 +89,8 @@ export default function LoginPage() {
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.22),transparent_35%),radial-gradient(circle_at_bottom_right,rgba(79,70,229,0.28),transparent_40%)]" />
       <div className="relative grid w-full max-w-5xl overflow-hidden rounded-[2rem] border border-white/10 bg-white shadow-2xl lg:grid-cols-[1fr_1.1fr]">
         <section className="hidden bg-slate-900 p-12 text-white lg:flex lg:flex-col lg:justify-between">
-          <Link to="/" className="flex items-center gap-3 text-sm font-black tracking-[0.2em] text-emerald-300">
-            <span className="brand-house" aria-hidden="true" /> RENTSPACE
+          <Link to="/" className="inline-flex w-fit items-center rounded-full bg-white px-5 py-3 shadow-lg shadow-black/20">
+            <img src={logoSrc} alt="RentSpace" className="h-7 w-auto object-contain" />
           </Link>
           <div>
             <p className="text-sm font-bold uppercase tracking-[0.25em] text-emerald-300">Welcome home</p>

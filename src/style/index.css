@@ -21,6 +21,16 @@ body {
   min-height: 100vh;
 }
 
+@keyframes barGrow {
+  from {
+    transform: scaleY(0);
+  }
+
+  to {
+    transform: scaleY(1);
+  }
+}
+
 .site-header {
   background: transparent;
 }
