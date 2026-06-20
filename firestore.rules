@@ -14,13 +14,20 @@ service cloud.firestore {
       return /databases/$(database)/documents/users/$(uid);
     }
 
-    function isAdmin() {
+    function userHasRole(role) {
       return signedIn()
         && exists(userDoc(request.auth.uid))
         && (
-          get(userDoc(request.auth.uid)).data.role == 'admin'
-          || get(userDoc(request.auth.uid)).data.roles.hasAny(['admin'])
+          get(userDoc(request.auth.uid)).data.role == role
+          || (
+            get(userDoc(request.auth.uid)).data.roles is list
+            && get(userDoc(request.auth.uid)).data.roles.hasAny([role])
+          )
         );
+    }
+
+    function isAdmin() {
+      return userHasRole('admin');
     }
 
     function isBossAdmin() {
@@ -28,11 +35,31 @@ service cloud.firestore {
         && request.auth.token.email == 'joesernsua@gmail.com';
     }
 
+    function isTenant() {
+      return userHasRole('tenant');
+    }
+
+    function isOwnerRole() {
+      return userHasRole('owner');
+    }
+
+    function hasValidCustomerRoles(role) {
+      return request.resource.data.roles is list
+        && request.resource.data.roles.hasAll([role])
+        && request.resource.data.roles.hasOnly(['tenant', 'owner']);
+    }
+
+    function hasValidAdminRoles() {
+      return request.resource.data.roles is list
+        && request.resource.data.roles.hasAll(['admin'])
+        && request.resource.data.roles.hasOnly(['admin']);
+    }
+
     function isInvitedAdminCreate(uid) {
       return isSelf(uid)
         && request.resource.data.uid == uid
         && request.resource.data.role == 'admin'
-        && request.resource.data.roles.hasOnly(['admin'])
+        && hasValidAdminRoles()
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.name is string
         && request.resource.data.adminEmployeeRole in ['manager', 'property-staff', 'finance-staff']
@@ -40,22 +67,110 @@ service cloud.firestore {
         && request.resource.data.adminEmployeeRole == get(/databases/$(database)/documents/adminInvites/$(request.resource.data.email)).data.employeeRole;
     }
 
-    function isTenant() {
-      return signedIn()
-        && exists(userDoc(request.auth.uid))
-        && (
-          get(userDoc(request.auth.uid)).data.role == 'tenant'
-          || get(userDoc(request.auth.uid)).data.roles.hasAny(['tenant'])
-        );
+    function isValidPublicEnquiryCreate() {
+      return request.resource.data.name is string
+        && request.resource.data.email is string
+        && request.resource.data.phone is string
+        && request.resource.data.message is string
+        && request.resource.data.status == 'new';
     }
 
-    function isOwnerRole() {
+    function isValidPublicAppointmentCreate() {
+      return request.resource.data.name is string
+        && request.resource.data.email is string
+        && request.resource.data.phone is string
+        && request.resource.data.preferredDate is string
+        && request.resource.data.preferredTime is string
+        && request.resource.data.unitType is string
+        && request.resource.data.status == 'pending';
+    }
+
+    function rentalRequestPath(requestId) {
+      return /databases/$(database)/documents/rentalRequests/$(requestId);
+    }
+
+    function paymentHistoryMatchesRentalRequest() {
+      return request.resource.data.requestId is string
+        && exists(rentalRequestPath(request.resource.data.requestId))
+        && get(rentalRequestPath(request.resource.data.requestId)).data.tenantId == request.auth.uid
+        && get(rentalRequestPath(request.resource.data.requestId)).data.ownerId == request.resource.data.ownerId
+        && get(rentalRequestPath(request.resource.data.requestId)).data.propertyId == request.resource.data.propertyId
+        && get(rentalRequestPath(request.resource.data.requestId)).data.status == 'approved'
+        && get(rentalRequestPath(request.resource.data.requestId)).data.payment.status in ['unpaid', 'paid'];
+    }
+
+    function isValidPaymentHistoryCreate() {
       return signedIn()
-        && exists(userDoc(request.auth.uid))
-        && (
-          get(userDoc(request.auth.uid)).data.role == 'owner'
-          || get(userDoc(request.auth.uid)).data.roles.hasAny(['owner'])
-        );
+        && request.resource.data.tenantId == request.auth.uid
+        && request.resource.data.status == 'paid'
+        && request.resource.data.billingPeriod in ['initial', 'monthly']
+        && request.resource.data.paymentMethodType in ['card', 'google-pay', 'fpx']
+        && request.resource.data.totalPaid is number
+        && request.resource.data.totalPaid > 0
+        && request.resource.data.rentDeposit is number
+        && request.resource.data.rentDeposit >= 0
+        && request.resource.data.utilityDeposit is number
+        && request.resource.data.utilityDeposit >= 0
+        && request.resource.data.monthlyRent is number
+        && request.resource.data.monthlyRent >= 0
+        && paymentHistoryMatchesRentalRequest();
+    }
+
+    function ownerCanRejectRentalRequest() {
+      return signedIn()
+        && resource.data.ownerId == request.auth.uid
+        && resource.data.status == 'pending'
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.tenantId == resource.data.tenantId
+        && request.resource.data.status == 'rejected'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']);
+    }
+
+    function ownerCanApproveRentalRequest() {
+      return signedIn()
+        && resource.data.ownerId == request.auth.uid
+        && resource.data.status == 'pending'
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.tenantId == resource.data.tenantId
+        && request.resource.data.status == 'approved'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'payment', 'updatedAt'])
+        && request.resource.data.payment.status == 'unpaid'
+        && request.resource.data.payment.rentDeposit is number
+        && request.resource.data.payment.rentDeposit >= 0
+        && request.resource.data.payment.utilityDeposit is number
+        && request.resource.data.payment.utilityDeposit >= 0
+        && request.resource.data.payment.monthlyRent is number
+        && request.resource.data.payment.monthlyRent >= 0
+        && request.resource.data.payment.totalDue is number
+        && request.resource.data.payment.totalDue >= 0;
+    }
+
+    function ownerCanUpdateMonthlyUtilities() {
+      return signedIn()
+        && resource.data.ownerId == request.auth.uid
+        && resource.data.status == 'approved'
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.tenantId == resource.data.tenantId
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['payment', 'updatedAt'])
+        && request.resource.data.payment.diff(resource.data.payment).affectedKeys().hasOnly(['monthlyUtilities']);
+    }
+
+    function tenantCanMarkRentalRequestPaid() {
+      return signedIn()
+        && resource.data.tenantId == request.auth.uid
+        && request.resource.data.tenantId == resource.data.tenantId
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.status == resource.data.status
+        && resource.data.status == 'approved'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['payment', 'updatedAt'])
+        && resource.data.payment.status == 'unpaid'
+        && request.resource.data.payment.status == 'paid'
+        && request.resource.data.payment.rentDeposit == resource.data.payment.rentDeposit
+        && request.resource.data.payment.utilityDeposit == resource.data.payment.utilityDeposit
+        && request.resource.data.payment.monthlyRent == resource.data.payment.monthlyRent
+        && request.resource.data.payment.totalDue == resource.data.payment.totalDue
+        && request.resource.data.payment.diff(resource.data.payment).affectedKeys().hasOnly(['status', 'paidAt']);
     }
 
     match /users/{uid} {
@@ -63,7 +178,7 @@ service cloud.firestore {
           isSelf(uid)
           && request.resource.data.uid == uid
           && request.resource.data.role in ['tenant', 'owner']
-          && request.resource.data.roles.hasOnly(['tenant', 'owner'])
+          && hasValidCustomerRoles(request.resource.data.role)
           && request.resource.data.email is string
           && request.resource.data.name is string
         )
@@ -77,7 +192,9 @@ service cloud.firestore {
           isSelf(uid)
           && request.resource.data.uid == uid
           && request.resource.data.role in ['tenant', 'owner']
-          && request.resource.data.roles.hasOnly(['tenant', 'owner'])
+          && hasValidCustomerRoles(request.resource.data.role)
+          && request.resource.data.email is string
+          && request.resource.data.name is string
         );
 
       allow delete: if isAdmin();
@@ -135,29 +252,10 @@ service cloud.firestore {
         );
 
       allow update: if isAdmin()
-        || (
-          signedIn()
-          && resource.data.ownerId == request.auth.uid
-          && request.resource.data.ownerId == resource.data.ownerId
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'payment', 'updatedAt'])
-          && request.resource.data.status in ['approved', 'rejected']
-        )
-        || (
-          signedIn()
-          && resource.data.tenantId == request.auth.uid
-          && request.resource.data.tenantId == resource.data.tenantId
-          && request.resource.data.ownerId == resource.data.ownerId
-          && request.resource.data.status == resource.data.status
-          && resource.data.status == 'approved'
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['payment', 'updatedAt'])
-          && resource.data.payment.status == 'unpaid'
-          && request.resource.data.payment.status == 'paid'
-          && request.resource.data.payment.rentDeposit == resource.data.payment.rentDeposit
-          && request.resource.data.payment.utilityDeposit == resource.data.payment.utilityDeposit
-          && request.resource.data.payment.monthlyRent == resource.data.payment.monthlyRent
-          && request.resource.data.payment.totalDue == resource.data.payment.totalDue
-          && request.resource.data.payment.diff(resource.data.payment).affectedKeys().hasOnly(['status', 'paidAt'])
-        );
+        || ownerCanRejectRentalRequest()
+        || ownerCanApproveRentalRequest()
+        || ownerCanUpdateMonthlyUtilities()
+        || tenantCanMarkRentalRequestPaid();
 
       allow delete: if isAdmin();
     }
@@ -183,13 +281,7 @@ service cloud.firestore {
     }
 
     match /paymentHistory/{paymentHistoryId} {
-      allow create: if signedIn()
-        && request.resource.data.tenantId == request.auth.uid
-        && request.resource.data.status == 'paid'
-        && request.resource.data.billingPeriod in ['initial', 'monthly']
-        && request.resource.data.paymentMethodType in ['card', 'google-pay', 'fpx']
-        && request.resource.data.totalPaid is number
-        && request.resource.data.totalPaid >= 0;
+      allow create: if isValidPaymentHistoryCreate();
 
       allow get, list: if isAdmin()
         || (
@@ -238,12 +330,12 @@ service cloud.firestore {
     }
 
     match /enquiries/{enquiryId} {
-      allow create: if true;
+      allow create: if isValidPublicEnquiryCreate();
       allow read, update, delete: if isAdmin();
     }
 
     match /appointments/{appointmentId} {
-      allow create: if true;
+      allow create: if isValidPublicAppointmentCreate();
       allow read, update, delete: if isAdmin();
     }
 
