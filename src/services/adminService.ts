@@ -18,12 +18,15 @@ import type { AppUser } from "../types/User";
 export interface AdminInvite {
   id: string;
   email: string;
+  employeeRole: AdminEmployeeRole;
   status: "invited";
   createdBy: string;
   createdAt?: Timestamp;
   usedBy?: string;
   usedAt?: Timestamp;
 }
+
+export type AdminEmployeeRole = "manager" | "property-staff" | "finance-staff";
 
 export function normalizeAdminInviteEmail(email: string) {
   return email.trim().toLowerCase();
@@ -69,10 +72,12 @@ export function getAllAdminInvitesAsAdmin(): Promise<AdminInvite[]> {
 export function addAdminInviteAsBoss(
   email: string,
   createdBy: string,
+  employeeRole: AdminEmployeeRole,
 ): Promise<void> {
   const normalizedEmail = normalizeAdminInviteEmail(email);
   return setDoc(doc(db, "adminInvites", normalizedEmail), {
     email: normalizedEmail,
+    employeeRole,
     status: "invited",
     createdBy,
     createdAt: serverTimestamp(),

@@ -32,6 +32,7 @@ async function createAdminProfileFromInvite(user: User) {
   const email = normalizeAdminInviteEmail(user.email);
   const inviteSnapshot = await getDoc(doc(db, "adminInvites", email));
   if (!inviteSnapshot.exists()) return null;
+  const invite = inviteSnapshot.data() as { employeeRole?: string };
 
   const name = user.displayName || email.split("@")[0] || "Admin";
   const profile = {
@@ -42,6 +43,7 @@ async function createAdminProfileFromInvite(user: User) {
     phone: user.phoneNumber ?? "",
     role: "admin",
     roles: ["admin"],
+    adminEmployeeRole: invite.employeeRole ?? "manager",
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };

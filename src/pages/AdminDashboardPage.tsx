@@ -17,6 +17,7 @@ import {
   normalizeAdminInviteEmail,
   updateRentalRequestStatusAsAdmin,
   type AdminInvite,
+  type AdminEmployeeRole,
 } from "../services/adminService";
 import type { PaymentHistory } from "../types/PaymentHistory";
 import type { Property } from "../types/Property";
@@ -197,6 +198,42 @@ const navItems = [
 
 const bossEmail = "joesernsua@gmail.com";
 
+const employeeRoleOptions: Array<{
+  id: AdminEmployeeRole;
+  label: string;
+  access: string;
+  description: string;
+}> = [
+  {
+    id: "manager",
+    label: "Manager",
+    access: "Users, Properties, Requests, Payments",
+    description: "For senior staff who can monitor most admin records.",
+  },
+  {
+    id: "property-staff",
+    label: "Property staff",
+    access: "Properties, Requests",
+    description: "For staff who handle listings and rental request follow-up.",
+  },
+  {
+    id: "finance-staff",
+    label: "Finance staff",
+    access: "Requests, Payments",
+    description: "For staff who review billing and payment records.",
+  },
+];
+
+const employeeRoleAccess: Record<AdminEmployeeRole, string[]> = {
+  manager: ["dashboard", "users", "properties", "rental-requests", "payments"],
+  "property-staff": ["dashboard", "properties", "rental-requests"],
+  "finance-staff": ["dashboard", "rental-requests", "payments"],
+};
+
+function getEmployeeRoleLabel(role?: string) {
+  return employeeRoleOptions.find((option) => option.id === role)?.label ?? "Manager";
+}
+
 export default function AdminDashboardPage() {
   const navigate = useNavigate();
   const currentAdminEmail = auth.currentUser?.email?.toLowerCase() ?? "";
@@ -219,12 +256,21 @@ export default function AdminDashboardPage() {
   const [invitesError, setInvitesError] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [userSearch, setUserSearch] = useState("");
+  const [propertySearch, setPropertySearch] = useState("");
+  const [requestSearch, setRequestSearch] = useState("");
+  const [paymentSearch, setPaymentSearch] = useState("");
   const [employeeEmail, setEmployeeEmail] = useState("");
+  const [pendingEmployeeEmail, setPendingEmployeeEmail] = useState("");
+  const [selectedEmployeeRole, setSelectedEmployeeRole] = useState<AdminEmployeeRole>("manager");
+  const [isRoleDialogOpen, setIsRoleDialogOpen] = useState(false);
   const [addingEmployee, setAddingEmployee] = useState(false);
 
   useEffect(() => {
     getAllUsers()
-      .then(setUsers)
+      .then((items) => {
+        setUsers(items);
+      })
       .catch(() => setUsersError("Unable to load users."))
       .finally(() => setUsersLoading(false));
     getAllProperties()
@@ -312,33 +358,51 @@ export default function AdminDashboardPage() {
     }
   };
 
-  const handleAddEmployee = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const normalizedEmail = normalizeAdminInviteEmail(employeeEmail);
-    const currentAdmin = auth.currentUser;
+  const validateEmployeeEmail = (email: string) => {
+    const normalizedEmail = normalizeAdminInviteEmail(email);
 
-    if (!currentAdmin) return;
     if (!normalizedEmail) {
       setInvitesError("Please enter an employee email.");
-      return;
+      return null;
     }
     if (normalizedEmail === bossEmail) {
       setInvitesError("Boss account is already the main admin.");
-      return;
+      return null;
     }
     if (employees.some((employee) => employee.email.toLowerCase() === normalizedEmail)) {
       setInvitesError("This employee already has an admin account.");
-      return;
+      return null;
     }
+
+    return normalizedEmail;
+  };
+
+  const handleAddEmployee = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const normalizedEmail = validateEmployeeEmail(employeeEmail);
+    if (!normalizedEmail) return;
+
+    setInvitesError("");
+    setPendingEmployeeEmail(normalizedEmail);
+    setSelectedEmployeeRole("manager");
+    setIsRoleDialogOpen(true);
+  };
+
+  const handleConfirmEmployeeInvite = async () => {
+    const normalizedEmail = validateEmployeeEmail(pendingEmployeeEmail);
+    const currentAdmin = auth.currentUser;
+
+    if (!currentAdmin || !normalizedEmail) return;
 
     setAddingEmployee(true);
     setInvitesError("");
     try {
-      await addAdminInviteAsBoss(normalizedEmail, currentAdmin.uid);
+      await addAdminInviteAsBoss(normalizedEmail, currentAdmin.uid, selectedEmployeeRole);
       setAdminInvites((items) => {
         const nextInvite: AdminInvite = {
           id: normalizedEmail,
           email: normalizedEmail,
+          employeeRole: selectedEmployeeRole,
           status: "invited",
           createdBy: currentAdmin.uid,
         };
@@ -348,6 +412,8 @@ export default function AdminDashboardPage() {
         );
       });
       setEmployeeEmail("");
+      setPendingEmployeeEmail("");
+      setIsRoleDialogOpen(false);
     } catch {
       setInvitesError("Unable to add employee email.");
     } finally {
@@ -411,9 +477,10 @@ export default function AdminDashboardPage() {
       {
         name: "Employee Invites",
         title: "Employee Invites",
-        headers: ["Email", "Status", "Created By", "Created"],
+        headers: ["Email", "Employee Role", "Status", "Created By", "Created"],
         rows: adminInvites.map((invite) => [
             invite.email,
+            getEmployeeRoleLabel(invite.employeeRole),
             invite.status,
             invite.createdBy,
             formatDate(invite.createdAt),
@@ -539,7 +606,18 @@ export default function AdminDashboardPage() {
   const totalMonthlyRent = properties.reduce((total, property) => total + (typeof property.price === "number" ? property.price : 0), 0);
   const paidRevenue = payments.reduce((total, payment) => total + (typeof payment.totalPaid === "number" ? payment.totalPaid : 0), 0);
   const isLoading = usersLoading || propertiesLoading || requestsLoading || paymentsLoading || invitesLoading;
-  const visibleNavItems = navItems.filter((item) => item.id !== "employees" || isBossAccount);
+  const currentAdminProfile = users.find(
+    (user) => user.email?.toLowerCase() === currentAdminEmail,
+  ) as (AppUser & { adminEmployeeRole?: AdminEmployeeRole }) | undefined;
+  const currentEmployeeRole = currentAdminProfile?.adminEmployeeRole;
+  const allowedNavIds = isBossAccount
+    ? navItems.map((item) => item.id)
+    : employeeRoleAccess[currentEmployeeRole ?? "manager"];
+  const visibleNavItems = navItems.filter(
+    (item) =>
+      allowedNavIds.includes(item.id) &&
+      (item.id !== "employees" || isBossAccount),
+  );
   const employees = users.filter(
     (user) =>
       user.email?.toLowerCase() !== bossEmail &&
@@ -551,6 +629,82 @@ export default function AdminDashboardPage() {
   const pendingAdminInvites = adminInvites.filter(
     (invite) => !registeredEmployeeEmails.has(invite.email.toLowerCase()),
   );
+  const normalizedUserSearch = userSearch.trim().toLowerCase();
+  const filteredUsers = normalizedUserSearch
+    ? users.filter((user) => {
+        const searchableText = [
+          user.name,
+          user.displayName,
+          user.email,
+          user.phone,
+          ...getUserRoles(user),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return searchableText.includes(normalizedUserSearch);
+      })
+    : users;
+  const normalizedPropertySearch = propertySearch.trim().toLowerCase();
+  const filteredProperties = normalizedPropertySearch
+    ? displayedProperties.filter((property) => {
+        const searchableText = [
+          property.title,
+          property.location,
+          property.type,
+          property.displayStatus,
+          property.ownerId,
+          formatPrice(property.price),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return searchableText.includes(normalizedPropertySearch);
+      })
+    : displayedProperties;
+  const normalizedRequestSearch = requestSearch.trim().toLowerCase();
+  const filteredRequests = normalizedRequestSearch
+    ? requests.filter((request) => {
+        const searchableText = [
+          request.propertyTitle,
+          request.tenantName,
+          request.tenantEmail,
+          request.status,
+          formatPrice(request.propertyPrice),
+          formatContractYears(request.contractYears),
+          formatDate(request.createdAt),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return searchableText.includes(normalizedRequestSearch);
+      })
+    : requests;
+  const normalizedPaymentSearch = paymentSearch.trim().toLowerCase();
+  const filteredPayments = normalizedPaymentSearch
+    ? payments.filter((payment) => {
+        const searchableText = [
+          payment.id,
+          payment.tenantName,
+          payment.tenantEmail,
+          payment.propertyTitle,
+          payment.billingPeriod,
+          payment.paymentMethodType,
+          payment.status,
+          formatPrice(payment.totalPaid),
+          formatDate(payment.paidAt ?? payment.createdAt),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return searchableText.includes(normalizedPaymentSearch);
+      })
+    : payments;
+  const filteredPaidRevenue = filteredPayments.reduce((total, payment) => total + (typeof payment.totalPaid === "number" ? payment.totalPaid : 0), 0);
 
   const summaryCards = [
     { label: "Total users", value: usersLoading ? "-" : users.length.toLocaleString(), icon: "U", change: "+ active" },
@@ -789,18 +943,28 @@ export default function AdminDashboardPage() {
 
           {activeSection === "users" && (
           <section id="users" className="mt-8 rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
-            <div className="flex items-center justify-between">
+            <div className="grid gap-4 lg:grid-cols-[180px_minmax(320px,640px)_auto] lg:items-start">
               <div>
                 <h2 className="text-xl font-black text-white">Users</h2>
                 <p className="mt-1 text-sm text-slate-400">Registered accounts and platform roles.</p>
               </div>
-              <span className="rounded-full bg-white/5 px-3 py-1 text-sm font-bold text-slate-300">{users.length} records</span>
+              <label className="block text-sm font-bold text-slate-300">
+                <span className="sr-only">Search users</span>
+                <input
+                  type="search"
+                  value={userSearch}
+                  onChange={(event) => setUserSearch(event.target.value)}
+                  placeholder="Search by name, email, phone, or role"
+                  className="w-full rounded-xl border border-white/10 bg-[#070b1d] px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-300/10"
+                />
+              </label>
+              <span className="justify-self-start rounded-full bg-white/5 px-3 py-1 text-sm font-bold text-slate-300 lg:justify-self-end">{filteredUsers.length} records</span>
             </div>
-            {usersLoading ? <p className="mt-5 text-slate-400">Loading users...</p> : users.length === 0 ? <p className="mt-5 text-slate-400">No users found.</p> : (
+            {usersLoading ? <p className="mt-5 text-slate-400">Loading users...</p> : users.length === 0 ? <p className="mt-5 text-slate-400">No users found.</p> : filteredUsers.length === 0 ? <p className="mt-5 text-slate-400">No users match your search.</p> : (
               <div className="mt-5 overflow-x-auto">
                 <table className="w-full min-w-[860px] text-left text-sm">
                   <thead className="text-slate-500"><tr><th className="py-3 pr-5">Name</th><th className="py-3 pr-5">Email</th><th className="py-3 pr-5">Role</th><th className="py-3 pr-5">Created</th><th className="py-3 pr-5">Profile</th></tr></thead>
-                  <tbody>{users.map((user) => <tr key={user.uid} className="border-t border-white/10"><td className="py-4 pr-5 font-semibold text-white">{user.name || user.displayName || "-"}</td><td className="py-4 pr-5 text-slate-300">{user.email}</td><td className="py-4 pr-5"><div className="flex flex-wrap gap-2">{getUserRoles(user).map((role) => <AdminRoleBadge key={role} role={role} />)}</div></td><td className="py-4 pr-5 text-slate-500">{formatDate(user.createdAt)}</td><td className="py-4 pr-5"><Link to={`/admin-users/${user.uid}`} className="inline-flex rounded-lg bg-emerald-400/10 px-3 py-2 font-semibold text-emerald-200 transition hover:bg-emerald-400/20">View profile</Link></td></tr>)}</tbody>
+                  <tbody>{filteredUsers.map((user) => <tr key={user.uid} className="border-t border-white/10"><td className="py-4 pr-5 font-semibold text-white">{user.name || user.displayName || "-"}</td><td className="py-4 pr-5 text-slate-300">{user.email}</td><td className="py-4 pr-5"><div className="flex flex-wrap gap-2">{getUserRoles(user).map((role) => <AdminRoleBadge key={role} role={role} />)}</div></td><td className="py-4 pr-5 text-slate-500">{formatDate(user.createdAt)}</td><td className="py-4 pr-5"><Link to={`/admin-users/${user.uid}`} className="inline-flex rounded-lg bg-emerald-400/10 px-3 py-2 font-semibold text-emerald-200 transition hover:bg-emerald-400/20">View profile</Link></td></tr>)}</tbody>
                 </table>
               </div>
             )}
@@ -837,6 +1001,76 @@ export default function AdminDashboardPage() {
                 {addingEmployee ? "Adding..." : "Add employee"}
               </button>
             </form>
+
+            {isRoleDialogOpen && (
+              <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-5">
+                <section className="w-full max-w-4xl rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-2xl shadow-black/40">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-300">Employee access</p>
+                      <h3 className="mt-2 text-2xl font-black text-white">Choose employee role</h3>
+                      <p className="mt-2 text-sm text-slate-400">{pendingEmployeeEmail}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsRoleDialogOpen(false)}
+                      className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-slate-300 transition hover:bg-white/10"
+                    >
+                      Close
+                    </button>
+                  </div>
+
+                  <div className="mt-6 overflow-x-auto">
+                    <table className="w-full min-w-[720px] text-left text-sm">
+                      <thead className="text-slate-500">
+                        <tr>
+                          <th className="py-3 pr-5">Select</th>
+                          <th className="py-3 pr-5">Role</th>
+                          <th className="py-3 pr-5">Can see</th>
+                          <th className="py-3 pr-5">Description</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {employeeRoleOptions.map((roleOption) => (
+                          <tr key={roleOption.id} className="border-t border-white/10">
+                            <td className="py-4 pr-5">
+                              <input
+                                type="radio"
+                                name="employeeRole"
+                                checked={selectedEmployeeRole === roleOption.id}
+                                onChange={() => setSelectedEmployeeRole(roleOption.id)}
+                                className="h-4 w-4 accent-emerald-400"
+                              />
+                            </td>
+                            <td className="py-4 pr-5 font-black text-white">{roleOption.label}</td>
+                            <td className="py-4 pr-5 text-emerald-200">{roleOption.access}</td>
+                            <td className="py-4 pr-5 text-slate-400">{roleOption.description}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="mt-6 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setIsRoleDialogOpen(false)}
+                      className="rounded-lg border border-white/10 bg-white/5 px-5 py-3 font-bold text-slate-300 transition hover:bg-white/10"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={addingEmployee}
+                      onClick={() => void handleConfirmEmployeeInvite()}
+                      className="rounded-lg bg-emerald-400 px-5 py-3 font-black text-[#07111f] transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {addingEmployee ? "Saving..." : "Confirm invite"}
+                    </button>
+                  </div>
+                </section>
+              </div>
+            )}
 
             <div className="mt-8 flex items-center justify-between">
               <h3 className="text-sm font-black uppercase tracking-[0.2em] text-slate-400">Registered employees</h3>
@@ -883,6 +1117,7 @@ export default function AdminDashboardPage() {
                   <thead className="text-slate-500">
                     <tr>
                       <th className="py-3 pr-5">Email</th>
+                      <th className="py-3 pr-5">Role</th>
                       <th className="py-3 pr-5">Status</th>
                       <th className="py-3 pr-5">Created</th>
                       <th className="py-3 pr-5">Action</th>
@@ -892,6 +1127,7 @@ export default function AdminDashboardPage() {
                     {pendingAdminInvites.map((invite) => (
                       <tr key={invite.id} className="border-t border-white/10">
                         <td className="py-4 pr-5 font-semibold text-white">{invite.email}</td>
+                        <td className="py-4 pr-5 text-emerald-200">{getEmployeeRoleLabel(invite.employeeRole)}</td>
                         <td className="py-4 pr-5">
                           <span className="rounded-full bg-amber-400/10 px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-amber-200">Pending</span>
                         </td>
@@ -917,19 +1153,29 @@ export default function AdminDashboardPage() {
 
           {activeSection === "properties" && (
           <section id="properties" className="mt-8 rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
-            <div className="flex items-center justify-between">
+            <div className="grid gap-4 lg:grid-cols-[220px_minmax(320px,640px)_auto] lg:items-start">
               <div>
                 <h2 className="text-xl font-black text-white">Properties</h2>
                 <p className="mt-1 text-sm text-slate-400">Monitor every listing and remove obsolete properties.</p>
               </div>
-              <span className="rounded-full bg-white/5 px-3 py-1 text-sm font-bold text-slate-300">{properties.length} listings</span>
+              <label className="block text-sm font-bold text-slate-300">
+                <span className="sr-only">Search properties</span>
+                <input
+                  type="search"
+                  value={propertySearch}
+                  onChange={(event) => setPropertySearch(event.target.value)}
+                  placeholder="Search by title, location, status, or owner"
+                  className="w-full rounded-xl border border-white/10 bg-[#070b1d] px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-300/10"
+                />
+              </label>
+              <span className="justify-self-start rounded-full bg-white/5 px-3 py-1 text-sm font-bold text-slate-300 lg:justify-self-end">{filteredProperties.length} listings</span>
             </div>
-            {propertiesLoading ? <p className="mt-5 text-slate-400">Loading properties...</p> : properties.length === 0 ? <p className="mt-5 text-slate-400">No properties found.</p> : (
+            {propertiesLoading ? <p className="mt-5 text-slate-400">Loading properties...</p> : properties.length === 0 ? <p className="mt-5 text-slate-400">No properties found.</p> : filteredProperties.length === 0 ? <p className="mt-5 text-slate-400">No properties match your search.</p> : (
               <div className="mt-5 overflow-x-auto">
                 <table className="w-full min-w-[980px] text-left text-sm">
                   <thead className="text-slate-500"><tr><th className="py-3 pr-5">Title</th><th className="py-3 pr-5">Location</th><th className="py-3 pr-5">Price</th><th className="py-3 pr-5">Type</th><th className="py-3 pr-5">Status</th><th className="py-3 pr-5">Owner ID</th><th className="py-3 pr-5">Action</th></tr></thead>
                   <tbody>
-                    {displayedProperties.map((property) => (
+                    {filteredProperties.map((property) => (
                       <tr key={property.id} className="border-t border-white/10">
                         <td className="py-4 pr-5 font-semibold text-white">{property.title}</td>
                         <td className="py-4 pr-5 text-slate-300">{property.location}</td>
@@ -951,19 +1197,29 @@ export default function AdminDashboardPage() {
 
           {activeSection === "rental-requests" && (
           <section id="rental-requests" className="mt-8 rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
-            <div className="flex items-center justify-between">
+            <div className="grid gap-4 lg:grid-cols-[220px_minmax(320px,640px)_auto] lg:items-start">
               <div>
                 <h2 className="text-xl font-black text-white">Rental requests</h2>
                 <p className="mt-1 text-sm text-slate-400">Rental demand and request outcomes.</p>
               </div>
-              <span className="rounded-full bg-white/5 px-3 py-1 text-sm font-bold text-slate-300">{pendingRequests} pending</span>
+              <label className="block text-sm font-bold text-slate-300">
+                <span className="sr-only">Search rental requests</span>
+                <input
+                  type="search"
+                  value={requestSearch}
+                  onChange={(event) => setRequestSearch(event.target.value)}
+                  placeholder="Search by property, tenant, email, or status"
+                  className="w-full rounded-xl border border-white/10 bg-[#070b1d] px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-300/10"
+                />
+              </label>
+              <span className="justify-self-start rounded-full bg-white/5 px-3 py-1 text-sm font-bold text-slate-300 lg:justify-self-end">{filteredRequests.length} requests</span>
             </div>
-            {requestsLoading ? <p className="mt-5 text-slate-400">Loading rental requests...</p> : requests.length === 0 ? <p className="mt-5 text-slate-400">No rental requests found.</p> : (
+            {requestsLoading ? <p className="mt-5 text-slate-400">Loading rental requests...</p> : requests.length === 0 ? <p className="mt-5 text-slate-400">No rental requests found.</p> : filteredRequests.length === 0 ? <p className="mt-5 text-slate-400">No rental requests match your search.</p> : (
               <div className="mt-5 overflow-x-auto">
                 <table className="w-full min-w-[1040px] text-left text-sm">
                   <thead className="text-slate-500"><tr><th className="py-3 pr-5">Property</th><th className="py-3 pr-5">Tenant</th><th className="py-3 pr-5">Email</th><th className="py-3 pr-5">Price</th><th className="py-3 pr-5">Contract</th><th className="py-3 pr-5">Status</th><th className="py-3 pr-5">Created</th><th className="py-3 pr-5">Action</th></tr></thead>
                   <tbody>
-                    {requests.map((request) => (
+                    {filteredRequests.map((request) => (
                       <tr key={request.id} className="border-t border-white/10">
                         <td className="py-4 pr-5 font-semibold text-white">{request.propertyTitle}</td>
                         <td className="py-4 pr-5 text-slate-300">{request.tenantName}</td>
@@ -1005,14 +1261,24 @@ export default function AdminDashboardPage() {
 
           {activeSection === "payments" && (
           <section id="payments" className="mt-8 rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
-            <div className="flex items-center justify-between">
+            <div className="grid gap-4 lg:grid-cols-[220px_minmax(320px,640px)_auto] lg:items-start">
               <div>
                 <h2 className="text-xl font-black text-white">Payments</h2>
                 <p className="mt-1 text-sm text-slate-400">Simulated payment records stored in Firestore.</p>
               </div>
-              <span className="rounded-full bg-white/5 px-3 py-1 text-sm font-bold text-slate-300">{formatPrice(paidRevenue)} paid</span>
+              <label className="block text-sm font-bold text-slate-300">
+                <span className="sr-only">Search payments</span>
+                <input
+                  type="search"
+                  value={paymentSearch}
+                  onChange={(event) => setPaymentSearch(event.target.value)}
+                  placeholder="Search by payment id, tenant, property, or method"
+                  className="w-full rounded-xl border border-white/10 bg-[#070b1d] px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-300/10"
+                />
+              </label>
+              <span className="justify-self-start rounded-full bg-white/5 px-3 py-1 text-sm font-bold text-slate-300 lg:justify-self-end">{formatPrice(filteredPaidRevenue)} paid</span>
             </div>
-            {paymentsLoading ? <p className="mt-5 text-slate-400">Loading payments...</p> : payments.length === 0 ? <p className="mt-5 text-slate-400">No payments found.</p> : (
+            {paymentsLoading ? <p className="mt-5 text-slate-400">Loading payments...</p> : payments.length === 0 ? <p className="mt-5 text-slate-400">No payments found.</p> : filteredPayments.length === 0 ? <p className="mt-5 text-slate-400">No payments match your search.</p> : (
               <div className="mt-5 overflow-x-auto">
                 <table className="w-full min-w-[1220px] text-left text-sm">
                   <thead className="text-slate-500">
@@ -1029,7 +1295,7 @@ export default function AdminDashboardPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {payments.map((payment) => (
+                    {filteredPayments.map((payment) => (
                       <tr key={payment.id} className="border-t border-white/10">
                         <td className="max-w-44 truncate py-4 pr-5 font-mono text-xs text-slate-500" title={payment.id}>{payment.id}</td>
                         <td className="py-4 pr-5 font-semibold text-white">{payment.tenantName}</td>

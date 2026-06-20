@@ -35,7 +35,9 @@ service cloud.firestore {
         && request.resource.data.roles.hasOnly(['admin'])
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.name is string
-        && exists(/databases/$(database)/documents/adminInvites/$(request.resource.data.email));
+        && request.resource.data.adminEmployeeRole in ['manager', 'property-staff', 'finance-staff']
+        && exists(/databases/$(database)/documents/adminInvites/$(request.resource.data.email))
+        && request.resource.data.adminEmployeeRole == get(/databases/$(database)/documents/adminInvites/$(request.resource.data.email)).data.employeeRole;
     }
 
     function isTenant() {
@@ -84,7 +86,12 @@ service cloud.firestore {
     match /adminInvites/{email} {
       allow get: if isBossAdmin()
         || (signedIn() && request.auth.token.email == email);
-      allow list, create, update, delete: if isBossAdmin();
+      allow list: if isBossAdmin();
+      allow create, update: if isBossAdmin()
+        && request.resource.data.email == email
+        && request.resource.data.employeeRole in ['manager', 'property-staff', 'finance-staff']
+        && request.resource.data.status in ['invited', 'accepted'];
+      allow delete: if isBossAdmin();
     }
 
     match /properties/{propertyId} {
