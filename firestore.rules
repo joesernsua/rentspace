@@ -14,6 +14,10 @@ service cloud.firestore {
       return /databases/$(database)/documents/users/$(uid);
     }
 
+    function adminInvite(email) {
+      return /databases/$(database)/documents/adminInvites/$(email);
+    }
+
     function userHasRole(role) {
       return signedIn()
         && exists(userDoc(request.auth.uid))
@@ -52,7 +56,7 @@ service cloud.firestore {
     function hasValidAdminRoles() {
       return request.resource.data.roles is list
         && request.resource.data.roles.hasAll(['admin'])
-        && request.resource.data.roles.hasOnly(['admin']);
+        && request.resource.data.roles.hasOnly(['tenant', 'owner', 'admin']);
     }
 
     function isInvitedAdminCreate(uid) {
@@ -63,8 +67,35 @@ service cloud.firestore {
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.name is string
         && request.resource.data.adminEmployeeRole in ['manager', 'property-staff', 'finance-staff']
-        && exists(/databases/$(database)/documents/adminInvites/$(request.resource.data.email))
-        && request.resource.data.adminEmployeeRole == get(/databases/$(database)/documents/adminInvites/$(request.resource.data.email)).data.employeeRole;
+        && exists(adminInvite(request.resource.data.email))
+        && request.resource.data.adminEmployeeRole == get(adminInvite(request.resource.data.email)).data.employeeRole;
+    }
+
+    function isInvitedAdminUpdate(uid) {
+      return isSelf(uid)
+        && resource.data.uid == uid
+        && resource.data.email == request.auth.token.email
+        && request.resource.data.uid == uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role == 'admin'
+        && hasValidAdminRoles()
+        && request.resource.data.name is string
+        && request.resource.data.adminEmployeeRole in ['manager', 'property-staff', 'finance-staff']
+        && exists(adminInvite(request.resource.data.email))
+        && request.resource.data.adminEmployeeRole == get(adminInvite(request.resource.data.email)).data.employeeRole;
+    }
+
+    function invitedEmployeeCanAcceptInvite(email) {
+      return signedIn()
+        && request.auth.token.email == email
+        && resource.data.email == email
+        && resource.data.status == 'invited'
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.employeeRole == resource.data.employeeRole
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.status == 'accepted'
+        && request.resource.data.acceptedUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedUid', 'acceptedAt']);
     }
 
     function isValidPublicEnquiryCreate() {
@@ -195,7 +226,8 @@ service cloud.firestore {
           && hasValidCustomerRoles(request.resource.data.role)
           && request.resource.data.email is string
           && request.resource.data.name is string
-        );
+        )
+        || isInvitedAdminUpdate(uid);
 
       allow delete: if isAdmin();
     }
@@ -208,6 +240,7 @@ service cloud.firestore {
         && request.resource.data.email == email
         && request.resource.data.employeeRole in ['manager', 'property-staff', 'finance-staff']
         && request.resource.data.status in ['invited', 'accepted'];
+      allow update: if invitedEmployeeCanAcceptInvite(email);
       allow delete: if isBossAdmin();
     }
 

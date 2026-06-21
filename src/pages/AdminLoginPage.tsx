@@ -30,31 +30,45 @@ async function createAdminProfileFromInvite(user: User) {
   if (!user.email) return null;
 
   const email = normalizeAdminInviteEmail(user.email);
+  const userRef = doc(db, "users", user.uid);
   const inviteSnapshot = await getDoc(doc(db, "adminInvites", email));
   if (!inviteSnapshot.exists()) return null;
   const invite = inviteSnapshot.data() as { employeeRole?: string };
+  const existingProfileSnapshot = await getDoc(userRef);
+  const existingProfile = existingProfileSnapshot.exists()
+    ? ({ uid: user.uid, ...existingProfileSnapshot.data() } as AppUser)
+    : null;
+  const existingRoles = existingProfile?.roles ?? (existingProfile ? [existingProfile.role] : []);
+  const roles = Array.from(
+    new Set(
+      [...existingRoles, existingProfile?.role, "tenant", "admin"].filter(
+        (role): role is AppUser["role"] =>
+          role === "tenant" || role === "owner" || role === "admin",
+      ),
+    ),
+  );
 
-  const name = user.displayName || email.split("@")[0] || "Admin";
+  const name = existingProfile?.name || user.displayName || email.split("@")[0] || "Admin";
   const profile = {
     uid: user.uid,
     name,
-    displayName: user.displayName ?? name,
+    displayName: user.displayName ?? existingProfile?.displayName ?? name,
     email,
-    phone: user.phoneNumber ?? "",
+    phone: existingProfile?.phone ?? user.phoneNumber ?? "",
     role: "admin",
-    roles: ["admin"],
+    roles,
     adminEmployeeRole: invite.employeeRole ?? "manager",
-    createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
+    ...(existingProfile ? {} : { createdAt: serverTimestamp() }),
   };
 
-  await setDoc(doc(db, "users", user.uid), profile);
+  await setDoc(userRef, profile, { merge: true });
 
   try {
     await updateDoc(doc(db, "adminInvites", email), {
       status: "accepted",
-      usedBy: user.uid,
-      usedAt: serverTimestamp(),
+      acceptedUid: user.uid,
+      acceptedAt: serverTimestamp(),
     });
   } catch {
     // The user profile is the source of truth after first login.

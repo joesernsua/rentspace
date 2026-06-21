@@ -19,9 +19,11 @@ export interface AdminInvite {
   id: string;
   email: string;
   employeeRole: AdminEmployeeRole;
-  status: "invited";
+  status: "invited" | "accepted";
   createdBy: string;
   createdAt?: Timestamp;
+  acceptedUid?: string;
+  acceptedAt?: Timestamp;
   usedBy?: string;
   usedAt?: Timestamp;
 }

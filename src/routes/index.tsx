@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate, useLocation } from "react-router";
 import App from "../App";
 import AdminProtectedRoute from "../components/AdminProtectedRoute";
+import PageTitle from "../components/PageTitle";
 import ProtectedRoute from "../components/ProtectedRoute";
 import AdminDashboardPage from "../pages/AdminDashboardPage";
 import AdminLoginPage from "../pages/AdminLoginPage";
@@ -21,6 +22,10 @@ function IndexHtmlRedirect() {
   return <Navigate to={`/${location.hash || "#home"}`} replace />;
 }
 
+function titled(title: string, element: React.ReactNode) {
+  return <PageTitle title={title}>{element}</PageTitle>;
+}
+
 const router = createBrowserRouter([
   {
     path: "/index.html",
@@ -28,7 +33,7 @@ const router = createBrowserRouter([
   },
   {
     path: "/login.html",
-    element: <LoginPage />,
+    element: titled("Login", <LoginPage />),
   },
   {
     path: "/login",
@@ -36,39 +41,39 @@ const router = createBrowserRouter([
   },
   {
     path: "/register",
-    element: <RegisterPage />,
+    element: titled("Register", <RegisterPage />),
   },
   {
     path: "/admin-login",
-    element: <AdminLoginPage />,
+    element: titled("Admin Login", <AdminLoginPage />),
   },
   {
     path: "/admin-login.html",
-    element: <AdminLoginPage />,
+    element: titled("Admin Login", <AdminLoginPage />),
   },
   {
     path: "/admin-dashboard",
-    element: <AdminProtectedRoute><AdminDashboardPage /></AdminProtectedRoute>,
+    element: titled("Admin Dashboard", <AdminProtectedRoute><AdminDashboardPage /></AdminProtectedRoute>),
   },
   {
     path: "/admin-users/:uid",
-    element: <AdminProtectedRoute><AdminUserProfilePage /></AdminProtectedRoute>,
+    element: titled("Admin User Profile", <AdminProtectedRoute><AdminUserProfilePage /></AdminProtectedRoute>),
   },
   {
     path: "/",
     element: <App />,
     children: [
-      { index: true, element: <HomePage /> },
+      { index: true, element: titled("RentSpace", <HomePage />) },
       { path: "about", element: <Navigate to="/#about-us" replace /> },
       { path: "help", element: <Navigate to="/#help" replace /> },
-      { path: "properties.php", element: <PropertyListingPage /> },
-      { path: "properties", element: <PropertyListingPage /> },
-      { path: "properties/:id", element: <PropertyDetailsPage /> },
-      { path: "chat", element: <ChatPage /> },
-      { path: "favorites", element: <FavoritesPage /> },
+      { path: "properties.php", element: titled("Properties", <PropertyListingPage />) },
+      { path: "properties", element: titled("Properties", <PropertyListingPage />) },
+      { path: "properties/:id", element: titled("Property Details", <PropertyDetailsPage />) },
+      { path: "chat", element: titled("Chat", <ChatPage />) },
+      { path: "favorites", element: titled("Favorites", <FavoritesPage />) },
       {
         path: "dashboard.html",
-        element: <ProtectedRoute role="tenant"><TenantDashboardPage /></ProtectedRoute>,
+        element: titled("Tenant Dashboard", <ProtectedRoute role="tenant"><TenantDashboardPage /></ProtectedRoute>),
       },
       {
         path: "dashboard",
@@ -76,15 +81,15 @@ const router = createBrowserRouter([
       },
       {
         path: "tenant-dashboard",
-        element: <ProtectedRoute role="tenant"><TenantDashboardPage /></ProtectedRoute>,
+        element: titled("Tenant Dashboard", <ProtectedRoute role="tenant"><TenantDashboardPage /></ProtectedRoute>),
       },
       {
         path: "my-rentals",
-        element: <ProtectedRoute role="tenant"><MyRentalsPage /></ProtectedRoute>,
+        element: titled("My Rentals", <ProtectedRoute role="tenant"><MyRentalsPage /></ProtectedRoute>),
       },
       {
         path: "owner-dashboard",
-        element: <ProtectedRoute role="owner"><OwnerDashboardPage /></ProtectedRoute>,
+        element: titled("Owner Dashboard", <ProtectedRoute role="owner"><OwnerDashboardPage /></ProtectedRoute>),
       },
     ],
   },
