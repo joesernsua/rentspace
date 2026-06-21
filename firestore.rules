@@ -251,7 +251,7 @@ service cloud.firestore {
 
       allow create: if isOwnerRole()
         && request.resource.data.ownerId == request.auth.uid
-        && request.resource.data.status in ['available', 'pending', 'rented']
+        && request.resource.data.status == 'pending'
         && request.resource.data.type in ['Room', 'Apartment', 'House', 'Condo'];
 
       allow update: if isAdmin()
@@ -259,7 +259,7 @@ service cloud.firestore {
           signedIn()
           && resource.data.ownerId == request.auth.uid
           && request.resource.data.ownerId == resource.data.ownerId
-          && request.resource.data.status in ['available', 'pending', 'rented']
+          && request.resource.data.status == 'pending'
           && request.resource.data.type in ['Room', 'Apartment', 'House', 'Condo']
         );
 

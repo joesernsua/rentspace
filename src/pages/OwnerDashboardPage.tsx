@@ -16,7 +16,6 @@ import {
   updateRentalRequestMonthlyUtilities,
 } from "../services/rentalRequestService";
 import {
-  propertyStatuses,
   propertyTypes,
   type CreatePropertyData,
   type Property,
@@ -43,7 +42,7 @@ const emptyForm: FormData = {
   description: "",
   imageUrl: "",
   imageUrls: [],
-  status: "available",
+  status: "pending",
 };
 
 function parseImageUrls(value: string) {
@@ -323,6 +322,7 @@ export default function OwnerDashboardPage() {
         ...form,
         imageUrl: imageUrls[0] ?? form.imageUrl,
         imageUrls,
+        status: "pending" as const,
       };
       if (editingId) {
         await updateProperty(editingId, payload);
@@ -687,7 +687,7 @@ export default function OwnerDashboardPage() {
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <h2 className="text-2xl font-black">{editingId ? "Edit Property" : "Add Property"}</h2>
-                      <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-400">Use available for listings tenants can discover, pending while preparing a listing, and rented once occupied.</p>
+                      <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-400">New and edited listings are submitted as pending. An admin must approve them before tenants can discover them.</p>
                     </div>
                     <button
                       type="button"
@@ -710,7 +710,10 @@ export default function OwnerDashboardPage() {
                     <label className={labelClass}>Type *<select value={form.type} onChange={(e) => setField("type", e.target.value as FormData["type"])} className={inputClass}>{propertyTypes.map((type) => <option className={optionClass} key={type}>{type}</option>)}</select></label>
                     <label className={labelClass}>Rooms<input min="0" type="number" value={form.rooms} onChange={(e) => setField("rooms", Number(e.target.value))} className={inputClass} /></label>
                     <label className={labelClass}>Bathrooms<input min="0" type="number" value={form.bathrooms} onChange={(e) => setField("bathrooms", Number(e.target.value))} className={inputClass} /></label>
-                    <label className={labelClass}>Status<select value={form.status} onChange={(e) => setField("status", e.target.value as FormData["status"])} className={inputClass}>{propertyStatuses.map((status) => <option className={optionClass} key={status}>{status}</option>)}</select></label>
+                    <div className={`${labelClass} rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200`}>
+                      <span>Approval status</span>
+                      <p className="mt-2 text-sm font-semibold">Pending admin approval</p>
+                    </div>
                     <div className={`${labelClass} md:col-span-2`}>
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
