@@ -6,21 +6,27 @@ import StatusBadge from "../components/StatusBadge";
 import { auth } from "../config/firebase";
 import {
   addAdminInviteAsBoss,
+  approveRentalRequestAsAdmin,
   deleteRentalRequestAsAdmin,
-  deletePropertyAsAdmin,
   deleteAdminInviteAsBoss,
+  getAllConversationsAsAdmin,
   getAllPaymentHistory,
   getAllAdminInvitesAsAdmin,
   getAllProperties,
   getAllRentalRequests,
   getAllUsers,
   normalizeAdminInviteEmail,
+  updatePropertyStatusAsAdmin,
   updateRentalRequestStatusAsAdmin,
+  updateUserAccountStatusAsAdmin,
   type AdminInvite,
   type AdminEmployeeRole,
 } from "../services/adminService";
+import { getAllReportedIssuesAsAdmin, replyToReportedIssueAsAdmin } from "../services/reportedIssueService";
+import type { Conversation } from "../types/Chat";
 import type { PaymentHistory } from "../types/PaymentHistory";
-import type { Property } from "../types/Property";
+import type { Property, PropertyStatus } from "../types/Property";
+import { reportedIssueStatuses, type ReportedIssue, type ReportedIssueStatus } from "../types/ReportedIssue";
 import type { RentalRequest, RentalRequestStatus } from "../types/RentalRequest";
 import type { AppUser } from "../types/User";
 
@@ -194,6 +200,8 @@ const navItems = [
   { id: "properties", label: "Properties", icon: "P", detail: "Listings control" },
   { id: "rental-requests", label: "Requests", icon: "R", detail: "Tenant demand" },
   { id: "payments", label: "Payments", icon: "$", detail: "Paid history" },
+  { id: "reports", label: "Reports", icon: "!", detail: "Issue tickets" },
+  { id: "messages", label: "Messages", icon: "M", detail: "Issues and chats" },
 ];
 
 const bossEmail = "joesernsua@gmail.com";
@@ -225,7 +233,7 @@ const employeeRoleOptions: Array<{
 ];
 
 const employeeRoleAccess: Record<AdminEmployeeRole, string[]> = {
-  manager: ["dashboard", "users", "properties", "rental-requests", "payments"],
+  manager: ["dashboard", "users", "properties", "rental-requests", "payments", "reports", "messages"],
   "property-staff": ["dashboard", "properties", "rental-requests"],
   "finance-staff": ["dashboard", "rental-requests", "payments"],
 };
@@ -243,16 +251,22 @@ export default function AdminDashboardPage() {
   const [properties, setProperties] = useState<Property[]>([]);
   const [requests, setRequests] = useState<RentalRequest[]>([]);
   const [payments, setPayments] = useState<PaymentHistory[]>([]);
+  const [reports, setReports] = useState<ReportedIssue[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [adminInvites, setAdminInvites] = useState<AdminInvite[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
   const [propertiesLoading, setPropertiesLoading] = useState(true);
   const [requestsLoading, setRequestsLoading] = useState(true);
   const [paymentsLoading, setPaymentsLoading] = useState(true);
+  const [reportsLoading, setReportsLoading] = useState(true);
+  const [messagesLoading, setMessagesLoading] = useState(true);
   const [invitesLoading, setInvitesLoading] = useState(isBossAccount);
   const [usersError, setUsersError] = useState("");
   const [propertiesError, setPropertiesError] = useState("");
   const [requestsError, setRequestsError] = useState("");
   const [paymentsError, setPaymentsError] = useState("");
+  const [reportsError, setReportsError] = useState("");
+  const [messagesError, setMessagesError] = useState("");
   const [invitesError, setInvitesError] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
@@ -260,6 +274,11 @@ export default function AdminDashboardPage() {
   const [propertySearch, setPropertySearch] = useState("");
   const [requestSearch, setRequestSearch] = useState("");
   const [paymentSearch, setPaymentSearch] = useState("");
+  const [reportSearch, setReportSearch] = useState("");
+  const [messageSearch, setMessageSearch] = useState("");
+  const [selectedReport, setSelectedReport] = useState<ReportedIssue | null>(null);
+  const [reportReply, setReportReply] = useState("");
+  const [reportStatus, setReportStatus] = useState<ReportedIssueStatus>("reviewing");
   const [employeeEmail, setEmployeeEmail] = useState("");
   const [pendingEmployeeEmail, setPendingEmployeeEmail] = useState("");
   const [selectedEmployeeRole, setSelectedEmployeeRole] = useState<AdminEmployeeRole>("manager");
@@ -293,6 +312,22 @@ export default function AdminDashboardPage() {
       )
       .catch(() => setPaymentsError("Unable to load payment history."))
       .finally(() => setPaymentsLoading(false));
+    getAllReportedIssuesAsAdmin()
+      .then(setReports)
+      .catch(() => setReportsError("Unable to load report tickets."))
+      .finally(() => setReportsLoading(false));
+    getAllConversationsAsAdmin()
+      .then((items) =>
+        setConversations(
+          items.sort(
+            (first, second) =>
+              (second.lastMessageAt?.toMillis() ?? second.updatedAt?.toMillis() ?? 0) -
+              (first.lastMessageAt?.toMillis() ?? first.updatedAt?.toMillis() ?? 0),
+          ),
+        ),
+      )
+      .catch(() => setMessagesError("Unable to load messages."))
+      .finally(() => setMessagesLoading(false));
   }, []);
 
   useEffect(() => {
@@ -312,20 +347,6 @@ export default function AdminDashboardPage() {
       .catch(() => setInvitesError("Unable to load employee invites."))
       .finally(() => setInvitesLoading(false));
   }, [isBossAccount]);
-
-  const handleDelete = async (property: Property) => {
-    if (!window.confirm(`Delete "${property.title}"? This cannot be undone.`)) return;
-    setDeletingId(property.id);
-    setPropertiesError("");
-    try {
-      await deletePropertyAsAdmin(property.id);
-      setProperties((items) => items.filter((item) => item.id !== property.id));
-    } catch {
-      setPropertiesError("Unable to delete the property.");
-    } finally {
-      setDeletingId(null);
-    }
-  };
 
   const handleDeleteRequest = async (request: RentalRequest) => {
     if (!window.confirm(`Delete request for "${request.propertyTitle}"? This cannot be undone.`)) return;
@@ -353,6 +374,116 @@ export default function AdminDashboardPage() {
       );
     } catch {
       setRequestsError("Unable to reject the rental request.");
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const handleApproveRequest = async (request: RentalRequest) => {
+    setUpdatingId(request.id);
+    setRequestsError("");
+    try {
+      await approveRentalRequestAsAdmin(request);
+      const monthlyRent = request.payment?.monthlyRent ?? request.propertyPrice;
+      const rentDeposit = request.payment?.rentDeposit ?? monthlyRent;
+      const utilityDeposit = request.payment?.utilityDeposit ?? 0;
+      setRequests((items) =>
+        items.map((item) =>
+          item.id === request.id
+            ? {
+                ...item,
+                status: "approved" as RentalRequestStatus,
+                payment: {
+                  rentDeposit,
+                  utilityDeposit,
+                  monthlyRent,
+                  totalDue: rentDeposit + utilityDeposit + monthlyRent,
+                  status: request.payment?.status ?? "unpaid",
+                  ...(request.payment?.paidAt ? { paidAt: request.payment.paidAt } : {}),
+                  ...(request.payment?.monthlyUtilities ? { monthlyUtilities: request.payment.monthlyUtilities } : {}),
+                },
+              }
+            : item,
+        ),
+      );
+    } catch {
+      setRequestsError("Unable to approve the rental request.");
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const handlePropertyStatusChange = async (
+    property: Property,
+    status: PropertyStatus,
+  ) => {
+    setUpdatingId(property.id);
+    setPropertiesError("");
+    try {
+      await updatePropertyStatusAsAdmin(property.id, status);
+      setProperties((items) =>
+        items.map((item) => (item.id === property.id ? { ...item, status } : item)),
+      );
+    } catch {
+      setPropertiesError("Unable to update the property status.");
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const handleUserAccountStatusChange = async (
+    user: AppUser,
+    accountStatus: NonNullable<AppUser["accountStatus"]>,
+  ) => {
+    setUpdatingId(user.uid);
+    setUsersError("");
+    try {
+      await updateUserAccountStatusAsAdmin(user.uid, accountStatus);
+      setUsers((items) =>
+        items.map((item) => (item.uid === user.uid ? { ...item, accountStatus } : item)),
+      );
+    } catch {
+      setUsersError("Unable to update the user account status.");
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const openReportReply = (report: ReportedIssue) => {
+    setSelectedReport(report);
+    setReportStatus(report.status === "open" ? "reviewing" : report.status);
+    setReportReply(report.adminReply ?? "");
+    setReportsError("");
+  };
+
+  const handleReportReply = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedReport) return;
+
+    setUpdatingId(selectedReport.id);
+    setReportsError("");
+    try {
+      await replyToReportedIssueAsAdmin(
+        selectedReport.id,
+        reportStatus,
+        reportReply.trim(),
+        auth.currentUser?.uid ?? "admin",
+      );
+      setReports((items) =>
+        items.map((item) =>
+          item.id === selectedReport.id
+            ? {
+                ...item,
+                status: reportStatus,
+                adminReply: reportReply.trim(),
+              }
+            : item,
+        ),
+      );
+      setSelectedReport(null);
+      setReportReply("");
+    } catch {
+      setReportsError("Unable to reply to the report ticket.");
     } finally {
       setUpdatingId(null);
     }
@@ -563,6 +694,8 @@ export default function AdminDashboardPage() {
             ["Rejected Requests", requests.filter((request) => request.status === "rejected").length],
             ["Available Properties", availableProperties],
             ["Pending Properties", displayedProperties.filter((property) => property.displayStatus === "pending").length],
+            ["Removal Requests", displayedProperties.filter((property) => property.displayStatus === "removal-pending").length],
+            ["Unavailable Properties", displayedProperties.filter((property) => property.displayStatus === "unavailable").length],
             ["Rented Properties", displayedProperties.filter((property) => property.displayStatus === "rented").length],
             ["Total Listed Rent", totalMonthlyRent],
             ["Paid Revenue", paidRevenue],
@@ -603,9 +736,13 @@ export default function AdminDashboardPage() {
     displayStatus: getDisplayedPropertyStatus(property, requests),
   }));
   const availableProperties = displayedProperties.filter((property) => property.displayStatus === "available").length;
+  const pendingProperties = displayedProperties.filter((property) => property.displayStatus === "pending").length;
+  const removalPendingProperties = displayedProperties.filter((property) => property.displayStatus === "removal-pending").length;
+  const unavailableProperties = displayedProperties.filter((property) => property.displayStatus === "unavailable").length;
+  const rentedProperties = displayedProperties.filter((property) => property.displayStatus === "rented").length;
   const totalMonthlyRent = properties.reduce((total, property) => total + (typeof property.price === "number" ? property.price : 0), 0);
   const paidRevenue = payments.reduce((total, payment) => total + (typeof payment.totalPaid === "number" ? payment.totalPaid : 0), 0);
-  const isLoading = usersLoading || propertiesLoading || requestsLoading || paymentsLoading || invitesLoading;
+  const isLoading = usersLoading || propertiesLoading || requestsLoading || paymentsLoading || reportsLoading || messagesLoading || invitesLoading;
   const currentAdminProfile = users.find(
     (user) => user.email?.toLowerCase() === currentAdminEmail,
   ) as (AppUser & { adminEmployeeRole?: AdminEmployeeRole }) | undefined;
@@ -705,12 +842,52 @@ export default function AdminDashboardPage() {
       })
     : payments;
   const filteredPaidRevenue = filteredPayments.reduce((total, payment) => total + (typeof payment.totalPaid === "number" ? payment.totalPaid : 0), 0);
+  const normalizedReportSearch = reportSearch.trim().toLowerCase();
+  const filteredReports = normalizedReportSearch
+    ? reports.filter((report) => {
+        const searchableText = [
+          report.id,
+          report.propertyTitle,
+          report.propertyLocation,
+          report.tenantName,
+          report.tenantEmail,
+          report.reason,
+          report.status,
+          report.details,
+          report.adminReply,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return searchableText.includes(normalizedReportSearch);
+      })
+    : reports;
+  const normalizedMessageSearch = messageSearch.trim().toLowerCase();
+  const filteredConversations = normalizedMessageSearch
+    ? conversations.filter((conversation) => {
+        const searchableText = [
+          conversation.id,
+          conversation.ownerName,
+          conversation.tenantName,
+          conversation.propertyTitle,
+          conversation.lastMessage,
+          conversation.propertyLocation,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return searchableText.includes(normalizedMessageSearch);
+      })
+    : conversations;
 
   const summaryCards = [
     { label: "Total users", value: usersLoading ? "-" : users.length.toLocaleString(), icon: "U", change: "+ active" },
     { label: "Properties", value: propertiesLoading ? "-" : properties.length.toLocaleString(), icon: "P", change: `${availableProperties} available` },
     { label: "Requests", value: requestsLoading ? "-" : requests.length.toLocaleString(), icon: "R", change: `${pendingRequests} pending` },
     { label: "Paid revenue", value: paymentsLoading ? "-" : formatPrice(paidRevenue), icon: "$", change: `${payments.length} payments` },
+    { label: "Open reports", value: reportsLoading ? "-" : reports.filter((report) => report.status !== "resolved").length.toLocaleString(), icon: "!", change: `${reports.length} tickets` },
   ];
 
   const dailyActivity = useMemo(
@@ -755,6 +932,8 @@ export default function AdminDashboardPage() {
     { label: "Tenant accounts", value: users.filter((user) => getUserRoles(user).includes("tenant")).length.toLocaleString(), section: "users" },
     { label: "Owner accounts", value: users.filter((user) => getUserRoles(user).includes("owner")).length.toLocaleString(), section: "users" },
     { label: "Approved requests", value: approvedRequests.toLocaleString(), section: "rental-requests" },
+    { label: "Open reports", value: reports.filter((report) => report.status !== "resolved").length.toLocaleString(), section: "reports" },
+    { label: "Open messages", value: conversations.length.toLocaleString(), section: "messages" },
     { label: "Total listed rent", value: formatPrice(totalMonthlyRent), section: "properties" },
     { label: "Payments this week", value: dailyActivity.reduce((total, day) => total + day.payments, 0).toLocaleString(), section: "payments" },
     { label: "Revenue this week", value: formatPrice(dailyActivity.reduce((total, day) => total + day.revenue, 0)), section: "payments" },
@@ -924,10 +1103,12 @@ export default function AdminDashboardPage() {
                   <article className="rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
                     <p className="text-sm font-bold text-slate-400">Property availability</p>
                     <p className="mt-2 text-3xl font-black text-white">{percent(availableProperties, properties.length)}%</p>
-                    <div className="mt-5 grid grid-cols-3 gap-2 text-center text-xs font-bold text-slate-400">
+                    <div className="mt-5 grid grid-cols-2 gap-2 text-center text-xs font-bold text-slate-400 sm:grid-cols-5">
                       <span className="rounded-xl bg-emerald-400/10 p-3 text-emerald-300">{availableProperties}<br />Available</span>
-                      <span className="rounded-xl bg-amber-400/10 p-3 text-amber-300">{displayedProperties.filter((item) => item.displayStatus === "pending").length}<br />Pending</span>
-                      <span className="rounded-xl bg-cyan-400/10 p-3 text-cyan-300">{displayedProperties.filter((item) => item.displayStatus === "rented").length}<br />Rented</span>
+                      <span className="rounded-xl bg-amber-400/10 p-3 text-amber-300">{pendingProperties}<br />Pending</span>
+                      <span className="rounded-xl bg-orange-400/10 p-3 text-orange-300">{removalPendingProperties}<br />Removal</span>
+                      <span className="rounded-xl bg-slate-400/10 p-3 text-slate-300">{unavailableProperties}<br />Unavailable</span>
+                      <span className="rounded-xl bg-cyan-400/10 p-3 text-cyan-300">{rentedProperties}<br />Rented</span>
                     </div>
                   </article>
                 </div>
@@ -935,9 +1116,9 @@ export default function AdminDashboardPage() {
             </>
           )}
 
-          {(usersError || propertiesError || requestsError || paymentsError || invitesError) && (
+          {(usersError || propertiesError || requestsError || paymentsError || reportsError || messagesError || invitesError) && (
             <div className="mt-5 rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-200">
-              {[usersError, propertiesError, requestsError, paymentsError, invitesError].filter(Boolean).join(" ")}
+              {[usersError, propertiesError, requestsError, paymentsError, reportsError, messagesError, invitesError].filter(Boolean).join(" ")}
             </div>
           )}
 
@@ -962,9 +1143,39 @@ export default function AdminDashboardPage() {
             </div>
             {usersLoading ? <p className="mt-5 text-slate-400">Loading users...</p> : users.length === 0 ? <p className="mt-5 text-slate-400">No users found.</p> : filteredUsers.length === 0 ? <p className="mt-5 text-slate-400">No users match your search.</p> : (
               <div className="mt-5 overflow-x-auto">
-                <table className="w-full min-w-[860px] text-left text-sm">
-                  <thead className="text-slate-500"><tr><th className="py-3 pr-5">Name</th><th className="py-3 pr-5">Email</th><th className="py-3 pr-5">Role</th><th className="py-3 pr-5">Created</th><th className="py-3 pr-5">Profile</th></tr></thead>
-                  <tbody>{filteredUsers.map((user) => <tr key={user.uid} className="border-t border-white/10"><td className="py-4 pr-5 font-semibold text-white">{user.name || user.displayName || "-"}</td><td className="py-4 pr-5 text-slate-300">{user.email}</td><td className="py-4 pr-5"><div className="flex flex-wrap gap-2">{getUserRoles(user).map((role) => <AdminRoleBadge key={role} role={role} />)}</div></td><td className="py-4 pr-5 text-slate-500">{formatDate(user.createdAt)}</td><td className="py-4 pr-5"><Link to={`/admin-users/${user.uid}`} className="inline-flex rounded-lg bg-emerald-400/10 px-3 py-2 font-semibold text-emerald-200 transition hover:bg-emerald-400/20">View profile</Link></td></tr>)}</tbody>
+                <table className="w-full min-w-[1080px] text-left text-sm">
+                  <thead className="text-slate-500"><tr><th className="py-3 pr-5">Name</th><th className="py-3 pr-5">Email</th><th className="py-3 pr-5">Role</th><th className="py-3 pr-5">Account</th><th className="py-3 pr-5">Created</th><th className="py-3 pr-5">Action</th></tr></thead>
+                  <tbody>{filteredUsers.map((user) => {
+                    const accountStatus = user.accountStatus ?? "active";
+                    const isSuspended = accountStatus === "suspended";
+
+                    return (
+                      <tr key={user.uid} className="border-t border-white/10">
+                        <td className="py-4 pr-5 font-semibold text-white">{user.name || user.displayName || "-"}</td>
+                        <td className="py-4 pr-5 text-slate-300">{user.email}</td>
+                        <td className="py-4 pr-5"><div className="flex flex-wrap gap-2">{getUserRoles(user).map((role) => <AdminRoleBadge key={role} role={role} />)}</div></td>
+                        <td className="py-4 pr-5">
+                          <span className={`rounded-full px-3 py-1 text-xs font-black uppercase tracking-[0.12em] ${isSuspended ? "bg-red-500/10 text-red-200" : "bg-emerald-400/10 text-emerald-200"}`}>
+                            {accountStatus}
+                          </span>
+                        </td>
+                        <td className="py-4 pr-5 text-slate-500">{formatDate(user.createdAt)}</td>
+                        <td className="py-4 pr-5">
+                          <div className="flex flex-wrap gap-2">
+                            <Link to={`/admin-users/${user.uid}`} className="inline-flex rounded-lg bg-emerald-400/10 px-3 py-2 font-semibold text-emerald-200 transition hover:bg-emerald-400/20">View profile</Link>
+                            <button
+                              type="button"
+                              disabled={updatingId === user.uid}
+                              onClick={() => void handleUserAccountStatusChange(user, isSuspended ? "active" : "suspended")}
+                              className={`rounded-lg px-3 py-2 font-semibold transition disabled:opacity-60 ${isSuspended ? "bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20" : "bg-amber-500/10 text-amber-200 hover:bg-amber-500/20"}`}
+                            >
+                              {updatingId === user.uid ? "Saving..." : isSuspended ? "Activate" : "Suspend"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}</tbody>
                 </table>
               </div>
             )}
@@ -1172,7 +1383,7 @@ export default function AdminDashboardPage() {
             </div>
             {propertiesLoading ? <p className="mt-5 text-slate-400">Loading properties...</p> : properties.length === 0 ? <p className="mt-5 text-slate-400">No properties found.</p> : filteredProperties.length === 0 ? <p className="mt-5 text-slate-400">No properties match your search.</p> : (
               <div className="mt-5 overflow-x-auto">
-                <table className="w-full min-w-[980px] text-left text-sm">
+                <table className="w-full min-w-[1100px] text-left text-sm">
                   <thead className="text-slate-500"><tr><th className="py-3 pr-5">Title</th><th className="py-3 pr-5">Location</th><th className="py-3 pr-5">Price</th><th className="py-3 pr-5">Type</th><th className="py-3 pr-5">Status</th><th className="py-3 pr-5">Owner ID</th><th className="py-3 pr-5">Action</th></tr></thead>
                   <tbody>
                     {filteredProperties.map((property) => (
@@ -1185,7 +1396,23 @@ export default function AdminDashboardPage() {
                           <StatusBadge value={property.displayStatus} />
                         </td>
                         <td className="max-w-48 truncate py-4 pr-5 font-mono text-xs text-slate-500">{property.ownerId}</td>
-                        <td className="py-4 pr-5"><button disabled={deletingId === property.id} type="button" onClick={() => void handleDelete(property)} className="rounded-lg bg-red-500/10 px-3 py-2 font-semibold text-red-200 hover:bg-red-500/20 disabled:opacity-60">{deletingId === property.id ? "Deleting..." : "Delete"}</button></td>
+                        <td className="py-4 pr-5">
+                          <div className="flex flex-wrap gap-2">
+                            <select
+                              value={property.status}
+                              disabled={updatingId === property.id}
+                              onChange={(event) => void handlePropertyStatusChange(property, event.target.value as PropertyStatus)}
+                              className="rounded-lg border border-white/10 bg-[#070b1d] px-3 py-2 font-semibold text-slate-200 outline-none transition focus:border-cyan-300 disabled:opacity-60"
+                              aria-label={`Change ${property.title} status`}
+                            >
+                              <option value="available">Available</option>
+                              <option value="pending">Pending</option>
+                              <option value="removal-pending">Removal pending</option>
+                              <option value="unavailable">Unavailable</option>
+                              <option value="rented">Rented</option>
+                            </select>
+                          </div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1231,14 +1458,24 @@ export default function AdminDashboardPage() {
                         <td className="py-4 pr-5">
                           <div className="flex flex-wrap gap-2">
                             {request.status === "pending" && (
-                              <button
-                                disabled={updatingId === request.id}
-                                type="button"
-                                onClick={() => void handleRejectRequest(request)}
-                                className="rounded-lg bg-amber-500/10 px-3 py-2 font-semibold text-amber-200 hover:bg-amber-500/20 disabled:opacity-60"
-                              >
-                                Reject
-                              </button>
+                              <>
+                                <button
+                                  disabled={updatingId === request.id}
+                                  type="button"
+                                  onClick={() => void handleApproveRequest(request)}
+                                  className="rounded-lg bg-emerald-400/10 px-3 py-2 font-semibold text-emerald-200 hover:bg-emerald-400/20 disabled:opacity-60"
+                                >
+                                  {updatingId === request.id ? "Saving..." : "Approve"}
+                                </button>
+                                <button
+                                  disabled={updatingId === request.id}
+                                  type="button"
+                                  onClick={() => void handleRejectRequest(request)}
+                                  className="rounded-lg bg-amber-500/10 px-3 py-2 font-semibold text-amber-200 hover:bg-amber-500/20 disabled:opacity-60"
+                                >
+                                  Reject
+                                </button>
+                              </>
                             )}
                             <button
                               disabled={deletingId === request.id}
@@ -1306,6 +1543,185 @@ export default function AdminDashboardPage() {
                         <td className="py-4 pr-5 font-semibold text-white">{formatPrice(payment.totalPaid)}</td>
                         <td className="py-4 pr-5"><StatusBadge value="approved" /></td>
                         <td className="py-4 pr-5 text-slate-500">{formatDate(payment.paidAt ?? payment.createdAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+          )}
+
+          {activeSection === "reports" && (
+          <section id="reports" className="mt-8 rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
+            <div className="grid gap-4 lg:grid-cols-[220px_minmax(320px,640px)_auto] lg:items-start">
+              <div>
+                <h2 className="text-xl font-black text-white">Reported issues</h2>
+                <p className="mt-1 text-sm text-slate-400">Review tenant property reports and reply with a resolution.</p>
+              </div>
+              <label className="block text-sm font-bold text-slate-300">
+                <span className="sr-only">Search reports</span>
+                <input
+                  type="search"
+                  value={reportSearch}
+                  onChange={(event) => setReportSearch(event.target.value)}
+                  placeholder="Search by ticket, tenant, property, reason, or status"
+                  className="w-full rounded-xl border border-white/10 bg-[#070b1d] px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-300/10"
+                />
+              </label>
+              <span className="justify-self-start rounded-full bg-white/5 px-3 py-1 text-sm font-bold text-slate-300 lg:justify-self-end">{filteredReports.length} tickets</span>
+            </div>
+
+            {reportsLoading ? <p className="mt-5 text-slate-400">Loading report tickets...</p> : reports.length === 0 ? <p className="mt-5 text-slate-400">No report tickets found.</p> : filteredReports.length === 0 ? <p className="mt-5 text-slate-400">No report tickets match your search.</p> : (
+              <div className="mt-5 overflow-x-auto">
+                <table className="w-full min-w-[1240px] text-left text-sm">
+                  <thead className="text-slate-500">
+                    <tr>
+                      <th className="py-3 pr-5">Ticket</th>
+                      <th className="py-3 pr-5">Property</th>
+                      <th className="py-3 pr-5">Tenant</th>
+                      <th className="py-3 pr-5">Reason</th>
+                      <th className="py-3 pr-5">Status</th>
+                      <th className="py-3 pr-5">Admin reply</th>
+                      <th className="py-3 pr-5">Updated</th>
+                      <th className="py-3 pr-5">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredReports.map((report) => (
+                      <tr key={report.id} className="border-t border-white/10 align-top">
+                        <td className="max-w-44 truncate py-4 pr-5 font-mono text-xs text-slate-500" title={report.id}>{report.id}</td>
+                        <td className="py-4 pr-5">
+                          <p className="font-semibold text-white">{report.propertyTitle}</p>
+                          <p className="mt-1 text-xs text-slate-500">{report.propertyLocation}</p>
+                        </td>
+                        <td className="py-4 pr-5">
+                          <p className="font-semibold text-white">{report.tenantName}</p>
+                          <p className="mt-1 text-xs text-slate-500">{report.tenantEmail}</p>
+                        </td>
+                        <td className="py-4 pr-5 text-slate-300">
+                          <p className="font-semibold text-white">{report.reason}</p>
+                          <p className="mt-1 line-clamp-2 max-w-72 text-xs text-slate-500" title={report.details}>{report.details}</p>
+                        </td>
+                        <td className="py-4 pr-5"><StatusBadge value={report.status} /></td>
+                        <td className="max-w-80 py-4 pr-5 text-slate-300">
+                          <p className="line-clamp-2" title={report.adminReply}>{report.adminReply || "-"}</p>
+                        </td>
+                        <td className="py-4 pr-5 text-slate-500">{formatDate(report.updatedAt ?? report.createdAt)}</td>
+                        <td className="py-4 pr-5">
+                          <button
+                            type="button"
+                            onClick={() => openReportReply(report)}
+                            className="inline-flex rounded-lg bg-cyan-400/10 px-3 py-2 font-semibold text-cyan-200 transition hover:bg-cyan-400/20"
+                          >
+                            View / Reply
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {selectedReport && (
+              <form onSubmit={handleReportReply} className="mt-6 rounded-2xl border border-cyan-300/20 bg-cyan-300/5 p-5">
+                <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.2em] text-cyan-200">Ticket {selectedReport.id}</p>
+                    <h3 className="mt-2 text-xl font-black text-white">{selectedReport.propertyTitle}</h3>
+                    <p className="mt-2 text-sm text-slate-300">{selectedReport.reason}</p>
+                    <p className="mt-3 rounded-xl bg-[#070b1d] p-4 text-sm leading-6 text-slate-300">{selectedReport.details}</p>
+                  </div>
+                  <div className="space-y-4">
+                    <label className="block text-sm font-bold text-slate-300">
+                      Status
+                      <select
+                        value={reportStatus}
+                        onChange={(event) => setReportStatus(event.target.value as ReportedIssueStatus)}
+                        className="mt-2 w-full rounded-xl border border-white/10 bg-[#070b1d] px-4 py-3 text-white outline-none transition focus:border-cyan-300"
+                      >
+                        {reportedIssueStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
+                      </select>
+                    </label>
+                    <label className="block text-sm font-bold text-slate-300">
+                      Reply to tenant
+                      <textarea
+                        rows={5}
+                        value={reportReply}
+                        onChange={(event) => setReportReply(event.target.value)}
+                        placeholder="Explain the action taken or next steps for the tenant."
+                        className="mt-2 w-full resize-y rounded-xl border border-white/10 bg-[#070b1d] px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300"
+                      />
+                    </label>
+                    <div className="flex flex-wrap gap-3">
+                      <button disabled={updatingId === selectedReport.id} className="rounded-xl bg-cyan-400 px-4 py-2 font-black text-slate-950 transition hover:bg-cyan-300 disabled:opacity-60">
+                        {updatingId === selectedReport.id ? "Saving..." : "Save reply"}
+                      </button>
+                      <button type="button" onClick={() => setSelectedReport(null)} className="rounded-xl border border-white/10 px-4 py-2 font-black text-slate-200 transition hover:bg-white/10">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            )}
+          </section>
+          )}
+
+          {activeSection === "messages" && (
+          <section id="messages" className="mt-8 rounded-2xl border border-white/10 bg-[#101834] p-6 shadow-xl shadow-black/10">
+            <div className="grid gap-4 lg:grid-cols-[220px_minmax(320px,640px)_auto] lg:items-start">
+              <div>
+                <h2 className="text-xl font-black text-white">Messages & issues</h2>
+                <p className="mt-1 text-sm text-slate-400">Monitor tenant-owner conversations and reported message activity.</p>
+              </div>
+              <label className="block text-sm font-bold text-slate-300">
+                <span className="sr-only">Search messages</span>
+                <input
+                  type="search"
+                  value={messageSearch}
+                  onChange={(event) => setMessageSearch(event.target.value)}
+                  placeholder="Search by property, tenant, owner, or latest message"
+                  className="w-full rounded-xl border border-white/10 bg-[#070b1d] px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-300/10"
+                />
+              </label>
+              <span className="justify-self-start rounded-full bg-white/5 px-3 py-1 text-sm font-bold text-slate-300 lg:justify-self-end">{filteredConversations.length} threads</span>
+            </div>
+            {messagesLoading ? <p className="mt-5 text-slate-400">Loading messages...</p> : conversations.length === 0 ? <p className="mt-5 text-slate-400">No conversations found.</p> : filteredConversations.length === 0 ? <p className="mt-5 text-slate-400">No message threads match your search.</p> : (
+              <div className="mt-5 overflow-x-auto">
+                <table className="w-full min-w-[1120px] text-left text-sm">
+                  <thead className="text-slate-500">
+                    <tr>
+                      <th className="py-3 pr-5">Property</th>
+                      <th className="py-3 pr-5">Tenant</th>
+                      <th className="py-3 pr-5">Owner</th>
+                      <th className="py-3 pr-5">Latest message</th>
+                      <th className="py-3 pr-5">Updated</th>
+                      <th className="py-3 pr-5">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredConversations.map((conversation) => (
+                      <tr key={conversation.id} className="border-t border-white/10">
+                        <td className="py-4 pr-5">
+                          <p className="font-semibold text-white">{conversation.propertyTitle}</p>
+                          <p className="mt-1 text-xs text-slate-500">{conversation.propertyLocation || conversation.propertyId}</p>
+                        </td>
+                        <td className="py-4 pr-5 text-slate-300">{conversation.tenantName}</td>
+                        <td className="py-4 pr-5 text-slate-300">{conversation.ownerName}</td>
+                        <td className="max-w-96 py-4 pr-5 text-slate-300">
+                          <p className="truncate" title={conversation.lastMessage}>{conversation.lastMessage || "-"}</p>
+                        </td>
+                        <td className="py-4 pr-5 text-slate-500">{formatDate(conversation.lastMessageAt ?? conversation.updatedAt ?? conversation.createdAt)}</td>
+                        <td className="py-4 pr-5">
+                          <Link
+                            to={`/chat?conversation=${conversation.id}`}
+                            className="inline-flex rounded-lg bg-cyan-400/10 px-3 py-2 font-semibold text-cyan-200 transition hover:bg-cyan-400/20"
+                          >
+                            Open thread
+                          </Link>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

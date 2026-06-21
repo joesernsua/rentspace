@@ -147,6 +147,20 @@ service cloud.firestore {
         && paymentHistoryMatchesRentalRequest();
     }
 
+    function isValidReportedIssueCreate() {
+      return isTenant()
+        && request.resource.data.tenantId == request.auth.uid
+        && request.resource.data.tenantEmail == request.auth.token.email
+        && request.resource.data.propertyId is string
+        && request.resource.data.propertyTitle is string
+        && request.resource.data.propertyLocation is string
+        && request.resource.data.propertyOwnerId is string
+        && request.resource.data.tenantName is string
+        && request.resource.data.reason is string
+        && request.resource.data.details is string
+        && request.resource.data.status == 'open';
+    }
+
     function ownerCanRejectRentalRequest() {
       return signedIn()
         && resource.data.ownerId == request.auth.uid
@@ -259,12 +273,11 @@ service cloud.firestore {
           signedIn()
           && resource.data.ownerId == request.auth.uid
           && request.resource.data.ownerId == resource.data.ownerId
-          && request.resource.data.status == 'pending'
+          && request.resource.data.status in ['pending', 'removal-pending']
           && request.resource.data.type in ['Room', 'Apartment', 'House', 'Condo']
         );
 
-      allow delete: if isAdmin()
-        || (signedIn() && resource.data.ownerId == request.auth.uid);
+      allow delete: if false;
     }
 
     match /rentalRequests/{requestId} {
@@ -360,6 +373,28 @@ service cloud.firestore {
 
         allow update, delete: if isAdmin();
       }
+    }
+
+    match /reportedIssues/{issueId} {
+      allow create: if isValidReportedIssueCreate();
+
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.tenantId == request.auth.uid);
+
+      allow update: if isAdmin()
+        && request.resource.data.propertyId == resource.data.propertyId
+        && request.resource.data.propertyTitle == resource.data.propertyTitle
+        && request.resource.data.propertyLocation == resource.data.propertyLocation
+        && request.resource.data.propertyOwnerId == resource.data.propertyOwnerId
+        && request.resource.data.tenantId == resource.data.tenantId
+        && request.resource.data.tenantName == resource.data.tenantName
+        && request.resource.data.tenantEmail == resource.data.tenantEmail
+        && request.resource.data.reason == resource.data.reason
+        && request.resource.data.details == resource.data.details
+        && request.resource.data.status in ['open', 'reviewing', 'resolved', 'rejected']
+        && request.resource.data.adminReply is string;
+
+      allow delete: if isAdmin();
     }
 
     match /enquiries/{enquiryId} {

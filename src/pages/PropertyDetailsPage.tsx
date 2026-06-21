@@ -5,6 +5,7 @@ import { useAuth } from "../context/AuthContext";
 import { startPropertyConversation } from "../services/chatService";
 import { isFavouriteProperty, toggleFavouriteProperty } from "../services/favouriteService";
 import { getPropertyById } from "../services/propertyService";
+import { createReportedIssue } from "../services/reportedIssueService";
 import {
   createRentalRequest,
   getTenantRentalRequests,
@@ -49,6 +50,11 @@ export default function PropertyDetailsPage() {
   const [startingChat, setStartingChat] = useState(false);
   const [isPhotoViewerOpen, setIsPhotoViewerOpen] = useState(false);
   const [isFavourite, setIsFavourite] = useState(false);
+  const [isReportOpen, setIsReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState("");
+  const [reportDetails, setReportDetails] = useState("");
+  const [reportMessage, setReportMessage] = useState("");
+  const [submittingReport, setSubmittingReport] = useState(false);
 
   useEffect(() => {
     if (!id) {
@@ -177,6 +183,39 @@ export default function PropertyDetailsPage() {
       setRequestMessage("Unable to open chat. Please try again.");
     } finally {
       setStartingChat(false);
+    }
+  };
+
+  const handleReport = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!property || !currentUser || userProfile?.role !== "tenant") return;
+    if (!reportReason || !reportDetails.trim()) {
+      setReportMessage("Please select a reason and describe the issue.");
+      return;
+    }
+
+    setSubmittingReport(true);
+    setReportMessage("");
+    try {
+      const ticketId = await createReportedIssue({
+        propertyId: property.id,
+        propertyTitle: property.title,
+        propertyLocation: property.location,
+        propertyOwnerId: property.ownerId,
+        tenantId: currentUser.uid,
+        tenantName: userProfile.name,
+        tenantEmail: userProfile.email,
+        reason: reportReason,
+        details: reportDetails.trim(),
+      });
+      setReportReason("");
+      setReportDetails("");
+      setIsReportOpen(false);
+      setReportMessage(`Report submitted. Ticket ID: ${ticketId}`);
+    } catch {
+      setReportMessage("Unable to submit the report. Please try again.");
+    } finally {
+      setSubmittingReport(false);
     }
   };
 
@@ -413,9 +452,59 @@ export default function PropertyDetailsPage() {
               )}
             </div>
 
-            <button type="button" className="mx-auto mt-6 flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white">
+            <button
+              type="button"
+              onClick={() => {
+                if (!currentUser || userProfile?.role !== "tenant") {
+                  navigate("/login.html");
+                  return;
+                }
+                setIsReportOpen((open) => !open);
+              }}
+              className="mx-auto mt-6 flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"
+            >
               <FiFlag /> Report this listing
             </button>
+            {reportMessage && (
+              <p role="status" className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm text-slate-700 dark:bg-white/5 dark:text-slate-300">
+                {reportMessage}
+              </p>
+            )}
+            {isReportOpen && (
+              <form onSubmit={handleReport} className="mt-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-xl shadow-slate-900/10 dark:border-white/10 dark:bg-slate-900">
+                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300">
+                  Reason
+                  <select
+                    required
+                    value={reportReason}
+                    onChange={(event) => setReportReason(event.target.value)}
+                    className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-slate-950/70 dark:text-white"
+                  >
+                    <option value="" className="bg-slate-950 text-white">Select a reason</option>
+                    {["Fake listing", "Wrong property details", "Suspicious owner behavior", "Property unavailable", "Payment or deposit concern", "Other"].map((reason) => (
+                      <option key={reason} value={reason} className="bg-slate-950 text-white">{reason}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="mt-4 block text-sm font-bold text-slate-700 dark:text-slate-300">
+                  Details
+                  <textarea
+                    required
+                    rows={4}
+                    value={reportDetails}
+                    onChange={(event) => setReportDetails(event.target.value)}
+                    placeholder="Explain what happened so admin can review it."
+                    className="mt-2 w-full resize-y rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none placeholder:text-slate-400 focus:border-emerald-400 dark:border-white/10 dark:bg-slate-950/70 dark:text-white dark:placeholder:text-slate-500"
+                  />
+                </label>
+                <button
+                  disabled={submittingReport}
+                  className="mt-4 w-full rounded-2xl bg-red-600 px-5 py-3 font-black text-white transition hover:bg-red-500 disabled:opacity-60"
+                >
+                  {submittingReport ? "Submitting..." : "Submit report"}
+                </button>
+              </form>
+            )}
           </aside>
         </div>
       </section>
