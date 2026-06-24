@@ -1,7 +1,17 @@
-import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+} from "firebase/firestore";
 import { db } from "../config/firebase";
 import type {
   SaveUserPaymentMethodData,
+  UserPaymentMethod,
   UserPaymentMethodType,
 } from "../types/PaymentMethod";
 
@@ -30,4 +40,24 @@ export async function saveUserPaymentMethod(
     },
     { merge: true },
   );
+}
+
+export async function getUserPaymentMethods(
+  userId: string,
+): Promise<UserPaymentMethod[]> {
+  const snapshot = await getDocs(
+    query(collection(db, "paymentMethods"), where("userId", "==", userId)),
+  );
+
+  return snapshot.docs.map((document) => ({
+    id: document.id,
+    ...document.data(),
+  }) as UserPaymentMethod);
+}
+
+export async function deleteUserPaymentMethod(
+  userId: string,
+  type: UserPaymentMethodType,
+): Promise<void> {
+  await deleteDoc(doc(db, "paymentMethods", getPaymentMethodDocumentId(userId, type)));
 }

@@ -7,7 +7,7 @@ import { useAuth } from "../context/AuthContext";
 import { createPaymentHistory } from "../services/paymentHistoryService";
 import { getPropertyById } from "../services/propertyService";
 import { saveUserPaymentMethod } from "../services/paymentMethodService";
-import { getTenantRentalRequests, markRentalRequestPaymentPaid } from "../services/rentalRequestService";
+import { cancelRentalRequestAsTenant, getTenantRentalRequests, markRentalRequestPaymentPaid } from "../services/rentalRequestService";
 import type { RentalRequest } from "../types/RentalRequest";
 import { getPaidRequestIds, savePaidRequestId } from "../utils/rentalPayments";
 
@@ -528,10 +528,27 @@ export default function TenantRequestStatusPanel() {
   const [loading, setLoading] = useState(Boolean(currentUser));
   const [error, setError] = useState("");
   const [checkoutRequest, setCheckoutRequest] = useState<PayableRequest | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
 
   const handlePaymentSuccess = (requestId: string) => {
     savePaidRequestId(requestId);
     setRequests((items) => items.filter((request) => request.id !== requestId));
+  };
+
+  const handleCancelRequest = async (request: RentalRequest) => {
+    if (!window.confirm(`Cancel your rental request for "${request.propertyTitle}"?`)) return;
+    setCancellingId(request.id);
+    setError("");
+    try {
+      await cancelRentalRequestAsTenant(request.id);
+      setRequests((items) =>
+        items.map((item) => (item.id === request.id ? { ...item, status: "cancelled" } : item)),
+      );
+    } catch {
+      setError("Unable to cancel this rental request. Please try again.");
+    } finally {
+      setCancellingId(null);
+    }
   };
 
   const checkoutOverlay = checkoutRequest ? (
@@ -669,15 +686,27 @@ export default function TenantRequestStatusPanel() {
                     {request.createdAt ? request.createdAt.toDate().toLocaleDateString() : "-"}
                   </td>
                   <td className="px-4 py-4 pr-6">
-                    {request.status === "approved" && request.payment && (
-                      <button
-                        type="button"
-                        onClick={() => setCheckoutRequest(request as PayableRequest)}
-                        className="whitespace-nowrap rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white transition hover:bg-emerald-700"
-                      >
-                        Make payment
-                      </button>
-                    )}
+                    <div className="flex flex-wrap gap-2">
+                      {request.status === "approved" && request.payment && (
+                        <button
+                          type="button"
+                          onClick={() => setCheckoutRequest(request as PayableRequest)}
+                          className="whitespace-nowrap rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white transition hover:bg-emerald-700"
+                        >
+                          Make payment
+                        </button>
+                      )}
+                      {request.status === "pending" && (
+                        <button
+                          type="button"
+                          disabled={cancellingId === request.id}
+                          onClick={() => void handleCancelRequest(request)}
+                          className="whitespace-nowrap rounded-xl bg-red-50 px-4 py-2 text-xs font-black text-red-700 transition hover:bg-red-100 disabled:opacity-60 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/20"
+                        >
+                          {cancellingId === request.id ? "Cancelling..." : "Cancel"}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

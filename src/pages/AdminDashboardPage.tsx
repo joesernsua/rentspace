@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router";
 import AdminRoleBadge, { getUserRoles } from "../components/AdminRoleBadge";
 import StatusBadge from "../components/StatusBadge";
 import { auth } from "../config/firebase";
+import { startAdminUserConversation } from "../services/chatService";
 import {
   addAdminInviteAsBoss,
   approveRentalRequestAsAdmin,
@@ -22,8 +23,10 @@ import {
   type AdminInvite,
   type AdminEmployeeRole,
 } from "../services/adminService";
+import { getAllOwnerSupportTicketsAsAdmin, replyToOwnerSupportTicketAsAdmin } from "../services/ownerSupportService";
 import { getAllReportedIssuesAsAdmin, replyToReportedIssueAsAdmin } from "../services/reportedIssueService";
 import type { Conversation } from "../types/Chat";
+import type { OwnerSupportTicket } from "../types/OwnerSupportTicket";
 import type { PaymentHistory } from "../types/PaymentHistory";
 import type { Property, PropertyStatus } from "../types/Property";
 import { reportedIssueStatuses, type ReportedIssue, type ReportedIssueStatus } from "../types/ReportedIssue";
@@ -31,7 +34,7 @@ import type { RentalRequest, RentalRequestStatus } from "../types/RentalRequest"
 import type { AppUser } from "../types/User";
 
 function formatDate(
-  value: AppUser["createdAt"] | RentalRequest["createdAt"] | PaymentHistory["paidAt"],
+  value: AppUser["createdAt"] | RentalRequest["createdAt"] | PaymentHistory["paidAt"] | OwnerSupportTicket["createdAt"],
 ) {
   return value ? value.toDate().toLocaleDateString() : "-";
 }
@@ -252,6 +255,7 @@ export default function AdminDashboardPage() {
   const [requests, setRequests] = useState<RentalRequest[]>([]);
   const [payments, setPayments] = useState<PaymentHistory[]>([]);
   const [reports, setReports] = useState<ReportedIssue[]>([]);
+  const [ownerSupportTickets, setOwnerSupportTickets] = useState<OwnerSupportTicket[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [adminInvites, setAdminInvites] = useState<AdminInvite[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
@@ -259,6 +263,7 @@ export default function AdminDashboardPage() {
   const [requestsLoading, setRequestsLoading] = useState(true);
   const [paymentsLoading, setPaymentsLoading] = useState(true);
   const [reportsLoading, setReportsLoading] = useState(true);
+  const [ownerSupportLoading, setOwnerSupportLoading] = useState(true);
   const [messagesLoading, setMessagesLoading] = useState(true);
   const [invitesLoading, setInvitesLoading] = useState(isBossAccount);
   const [usersError, setUsersError] = useState("");
@@ -266,6 +271,7 @@ export default function AdminDashboardPage() {
   const [requestsError, setRequestsError] = useState("");
   const [paymentsError, setPaymentsError] = useState("");
   const [reportsError, setReportsError] = useState("");
+  const [ownerSupportError, setOwnerSupportError] = useState("");
   const [messagesError, setMessagesError] = useState("");
   const [invitesError, setInvitesError] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -276,9 +282,13 @@ export default function AdminDashboardPage() {
   const [paymentSearch, setPaymentSearch] = useState("");
   const [reportSearch, setReportSearch] = useState("");
   const [messageSearch, setMessageSearch] = useState("");
+  const [adminMessageText, setAdminMessageText] = useState("Hi, admin is contacting you about your RentSpace account.");
   const [selectedReport, setSelectedReport] = useState<ReportedIssue | null>(null);
   const [reportReply, setReportReply] = useState("");
   const [reportStatus, setReportStatus] = useState<ReportedIssueStatus>("reviewing");
+  const [selectedOwnerSupportTicket, setSelectedOwnerSupportTicket] = useState<OwnerSupportTicket | null>(null);
+  const [ownerSupportReply, setOwnerSupportReply] = useState("");
+  const [ownerSupportStatus, setOwnerSupportStatus] = useState<ReportedIssueStatus>("reviewing");
   const [employeeEmail, setEmployeeEmail] = useState("");
   const [pendingEmployeeEmail, setPendingEmployeeEmail] = useState("");
   const [selectedEmployeeRole, setSelectedEmployeeRole] = useState<AdminEmployeeRole>("manager");
@@ -316,6 +326,10 @@ export default function AdminDashboardPage() {
       .then(setReports)
       .catch(() => setReportsError("Unable to load report tickets."))
       .finally(() => setReportsLoading(false));
+    getAllOwnerSupportTicketsAsAdmin()
+      .then(setOwnerSupportTickets)
+      .catch(() => setOwnerSupportError("Unable to load owner support tickets."))
+      .finally(() => setOwnerSupportLoading(false));
     getAllConversationsAsAdmin()
       .then((items) =>
         setConversations(
@@ -449,6 +463,33 @@ export default function AdminDashboardPage() {
     }
   };
 
+  const handleAdminMessageUser = async (user: AppUser) => {
+    const currentAdmin = auth.currentUser;
+    if (!currentAdmin) return;
+    const userRoles = getUserRoles(user);
+    const userRole = userRoles.includes("owner") ? "owner" : "tenant";
+    const conversationType = userRole === "owner" ? "admin-owner" : "admin-tenant";
+
+    setUpdatingId(user.uid);
+    setMessagesError("");
+    try {
+      const conversationId = await startAdminUserConversation({
+        adminId: currentAdmin.uid,
+        adminName: currentAdmin.displayName || currentAdmin.email || "Admin",
+        userId: user.uid,
+        userName: user.name || user.displayName || user.email,
+        userEmail: user.email,
+        userRole,
+        message: adminMessageText.trim(),
+      });
+      navigate(`/chat?type=${conversationType}&conversation=${conversationId}`);
+    } catch {
+      setMessagesError("Unable to start an admin message with this user.");
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
   const openReportReply = (report: ReportedIssue) => {
     setSelectedReport(report);
     setReportStatus(report.status === "open" ? "reviewing" : report.status);
@@ -484,6 +525,46 @@ export default function AdminDashboardPage() {
       setReportReply("");
     } catch {
       setReportsError("Unable to reply to the report ticket.");
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const openOwnerSupportReply = (ticket: OwnerSupportTicket) => {
+    setSelectedOwnerSupportTicket(ticket);
+    setOwnerSupportStatus(ticket.status === "open" ? "reviewing" : ticket.status);
+    setOwnerSupportReply(ticket.adminReply ?? "");
+    setOwnerSupportError("");
+  };
+
+  const handleOwnerSupportReply = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedOwnerSupportTicket) return;
+
+    setUpdatingId(selectedOwnerSupportTicket.id);
+    setOwnerSupportError("");
+    try {
+      await replyToOwnerSupportTicketAsAdmin(
+        selectedOwnerSupportTicket.id,
+        ownerSupportStatus,
+        ownerSupportReply.trim(),
+        auth.currentUser?.uid ?? "admin",
+      );
+      setOwnerSupportTickets((items) =>
+        items.map((item) =>
+          item.id === selectedOwnerSupportTicket.id
+            ? {
+                ...item,
+                status: ownerSupportStatus,
+                adminReply: ownerSupportReply.trim(),
+              }
+            : item,
+        ),
+      );
+      setSelectedOwnerSupportTicket(null);
+      setOwnerSupportReply("");
+    } catch {
+      setOwnerSupportError("Unable to reply to the owner support ticket.");
     } finally {
       setUpdatingId(null);
     }
@@ -742,7 +823,7 @@ export default function AdminDashboardPage() {
   const rentedProperties = displayedProperties.filter((property) => property.displayStatus === "rented").length;
   const totalMonthlyRent = properties.reduce((total, property) => total + (typeof property.price === "number" ? property.price : 0), 0);
   const paidRevenue = payments.reduce((total, payment) => total + (typeof payment.totalPaid === "number" ? payment.totalPaid : 0), 0);
-  const isLoading = usersLoading || propertiesLoading || requestsLoading || paymentsLoading || reportsLoading || messagesLoading || invitesLoading;
+  const isLoading = usersLoading || propertiesLoading || requestsLoading || paymentsLoading || reportsLoading || ownerSupportLoading || messagesLoading || invitesLoading;
   const currentAdminProfile = users.find(
     (user) => user.email?.toLowerCase() === currentAdminEmail,
   ) as (AppUser & { adminEmployeeRole?: AdminEmployeeRole }) | undefined;
@@ -863,6 +944,24 @@ export default function AdminDashboardPage() {
         return searchableText.includes(normalizedReportSearch);
       })
     : reports;
+  const filteredOwnerSupportTickets = normalizedReportSearch
+    ? ownerSupportTickets.filter((ticket) => {
+        const searchableText = [
+          ticket.id,
+          ticket.ownerName,
+          ticket.ownerEmail,
+          ticket.subject,
+          ticket.message,
+          ticket.status,
+          ticket.adminReply,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return searchableText.includes(normalizedReportSearch);
+      })
+    : ownerSupportTickets;
   const normalizedMessageSearch = messageSearch.trim().toLowerCase();
   const filteredConversations = normalizedMessageSearch
     ? conversations.filter((conversation) => {
@@ -1116,9 +1215,9 @@ export default function AdminDashboardPage() {
             </>
           )}
 
-          {(usersError || propertiesError || requestsError || paymentsError || reportsError || messagesError || invitesError) && (
+          {(usersError || propertiesError || requestsError || paymentsError || reportsError || ownerSupportError || messagesError || invitesError) && (
             <div className="mt-5 rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-200">
-              {[usersError, propertiesError, requestsError, paymentsError, reportsError, messagesError, invitesError].filter(Boolean).join(" ")}
+              {[usersError, propertiesError, requestsError, paymentsError, reportsError, ownerSupportError, messagesError, invitesError].filter(Boolean).join(" ")}
             </div>
           )}
 
@@ -1141,6 +1240,15 @@ export default function AdminDashboardPage() {
               </label>
               <span className="justify-self-start rounded-full bg-white/5 px-3 py-1 text-sm font-bold text-slate-300 lg:justify-self-end">{filteredUsers.length} records</span>
             </div>
+            <label className="mt-5 block text-sm font-bold text-slate-300">
+              Default admin message
+              <input
+                value={adminMessageText}
+                onChange={(event) => setAdminMessageText(event.target.value)}
+                placeholder="Message sent when opening a user chat"
+                className="mt-2 w-full rounded-xl border border-white/10 bg-[#070b1d] px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-300/10"
+              />
+            </label>
             {usersLoading ? <p className="mt-5 text-slate-400">Loading users...</p> : users.length === 0 ? <p className="mt-5 text-slate-400">No users found.</p> : filteredUsers.length === 0 ? <p className="mt-5 text-slate-400">No users match your search.</p> : (
               <div className="mt-5 overflow-x-auto">
                 <table className="w-full min-w-[1080px] text-left text-sm">
@@ -1163,6 +1271,14 @@ export default function AdminDashboardPage() {
                         <td className="py-4 pr-5">
                           <div className="flex flex-wrap gap-2">
                             <Link to={`/admin-users/${user.uid}`} className="inline-flex rounded-lg bg-emerald-400/10 px-3 py-2 font-semibold text-emerald-200 transition hover:bg-emerald-400/20">View profile</Link>
+                            <button
+                              type="button"
+                              disabled={updatingId === user.uid}
+                              onClick={() => void handleAdminMessageUser(user)}
+                              className="rounded-lg bg-cyan-400/10 px-3 py-2 font-semibold text-cyan-200 transition hover:bg-cyan-400/20 disabled:opacity-60"
+                            >
+                              {updatingId === user.uid ? "Opening..." : "Message"}
+                            </button>
                             <button
                               type="button"
                               disabled={updatingId === user.uid}
@@ -1666,6 +1782,107 @@ export default function AdminDashboardPage() {
                 </div>
               </form>
             )}
+
+            <div className="mt-8 border-t border-white/10 pt-6">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-black text-white">Owner admin support</h3>
+                  <p className="mt-1 text-sm text-slate-400">Reply to owners who need help from admin.</p>
+                </div>
+                <span className="rounded-full bg-white/5 px-3 py-1 text-sm font-bold text-slate-300">{filteredOwnerSupportTickets.length} tickets</span>
+              </div>
+
+              {ownerSupportLoading ? <p className="mt-5 text-slate-400">Loading owner support tickets...</p> : ownerSupportTickets.length === 0 ? <p className="mt-5 text-slate-400">No owner support tickets found.</p> : filteredOwnerSupportTickets.length === 0 ? <p className="mt-5 text-slate-400">No owner support tickets match your search.</p> : (
+                <div className="mt-5 overflow-x-auto">
+                  <table className="w-full min-w-[1120px] text-left text-sm">
+                    <thead className="text-slate-500">
+                      <tr>
+                        <th className="py-3 pr-5">Ticket</th>
+                        <th className="py-3 pr-5">Owner</th>
+                        <th className="py-3 pr-5">Subject</th>
+                        <th className="py-3 pr-5">Message</th>
+                        <th className="py-3 pr-5">Status</th>
+                        <th className="py-3 pr-5">Admin reply</th>
+                        <th className="py-3 pr-5">Updated</th>
+                        <th className="py-3 pr-5">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredOwnerSupportTickets.map((ticket) => (
+                        <tr key={ticket.id} className="border-t border-white/10 align-top">
+                          <td className="max-w-44 truncate py-4 pr-5 font-mono text-xs text-slate-500" title={ticket.id}>{ticket.id}</td>
+                          <td className="py-4 pr-5">
+                            <p className="font-semibold text-white">{ticket.ownerName}</p>
+                            <p className="mt-1 text-xs text-slate-500">{ticket.ownerEmail}</p>
+                          </td>
+                          <td className="py-4 pr-5 font-semibold text-white">{ticket.subject}</td>
+                          <td className="max-w-80 py-4 pr-5 text-slate-300">
+                            <p className="line-clamp-2" title={ticket.message}>{ticket.message}</p>
+                          </td>
+                          <td className="py-4 pr-5"><StatusBadge value={ticket.status} /></td>
+                          <td className="max-w-80 py-4 pr-5 text-slate-300">
+                            <p className="line-clamp-2" title={ticket.adminReply}>{ticket.adminReply || "-"}</p>
+                          </td>
+                          <td className="py-4 pr-5 text-slate-500">{formatDate(ticket.updatedAt ?? ticket.createdAt)}</td>
+                          <td className="py-4 pr-5">
+                            <button
+                              type="button"
+                              onClick={() => openOwnerSupportReply(ticket)}
+                              className="inline-flex rounded-lg bg-cyan-400/10 px-3 py-2 font-semibold text-cyan-200 transition hover:bg-cyan-400/20"
+                            >
+                              View / Reply
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {selectedOwnerSupportTicket && (
+                <form onSubmit={handleOwnerSupportReply} className="mt-6 rounded-2xl border border-emerald-300/20 bg-emerald-300/5 p-5">
+                  <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-[0.2em] text-emerald-200">Ticket {selectedOwnerSupportTicket.id}</p>
+                      <h3 className="mt-2 text-xl font-black text-white">{selectedOwnerSupportTicket.subject}</h3>
+                      <p className="mt-2 text-sm text-slate-300">{selectedOwnerSupportTicket.ownerName} · {selectedOwnerSupportTicket.ownerEmail}</p>
+                      <p className="mt-3 rounded-xl bg-[#070b1d] p-4 text-sm leading-6 text-slate-300">{selectedOwnerSupportTicket.message}</p>
+                    </div>
+                    <div className="space-y-4">
+                      <label className="block text-sm font-bold text-slate-300">
+                        Status
+                        <select
+                          value={ownerSupportStatus}
+                          onChange={(event) => setOwnerSupportStatus(event.target.value as ReportedIssueStatus)}
+                          className="mt-2 w-full rounded-xl border border-white/10 bg-[#070b1d] px-4 py-3 text-white outline-none transition focus:border-cyan-300"
+                        >
+                          {reportedIssueStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
+                        </select>
+                      </label>
+                      <label className="block text-sm font-bold text-slate-300">
+                        Reply to owner
+                        <textarea
+                          rows={5}
+                          value={ownerSupportReply}
+                          onChange={(event) => setOwnerSupportReply(event.target.value)}
+                          placeholder="Reply with admin guidance, action taken, or next steps."
+                          className="mt-2 w-full resize-y rounded-xl border border-white/10 bg-[#070b1d] px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300"
+                        />
+                      </label>
+                      <div className="flex flex-wrap gap-3">
+                        <button disabled={updatingId === selectedOwnerSupportTicket.id} className="rounded-xl bg-emerald-400 px-4 py-2 font-black text-slate-950 transition hover:bg-emerald-300 disabled:opacity-60">
+                          {updatingId === selectedOwnerSupportTicket.id ? "Saving..." : "Save reply"}
+                        </button>
+                        <button type="button" onClick={() => setSelectedOwnerSupportTicket(null)} className="rounded-xl border border-white/10 px-4 py-2 font-black text-slate-200 transition hover:bg-white/10">
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </form>
+              )}
+            </div>
           </section>
           )}
 
@@ -1716,7 +1933,7 @@ export default function AdminDashboardPage() {
                         <td className="py-4 pr-5 text-slate-500">{formatDate(conversation.lastMessageAt ?? conversation.updatedAt ?? conversation.createdAt)}</td>
                         <td className="py-4 pr-5">
                           <Link
-                            to={`/chat?conversation=${conversation.id}`}
+                            to={`/chat?type=${conversation.type ?? "tenant-owner"}&conversation=${conversation.id}`}
                             className="inline-flex rounded-lg bg-cyan-400/10 px-3 py-2 font-semibold text-cyan-200 transition hover:bg-cyan-400/20"
                           >
                             Open thread

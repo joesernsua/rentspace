@@ -77,6 +77,18 @@ export async function loginWithGoogleUser(role?: AppUser["role"]): Promise<AppUs
   return role ? { ...profile, role } : profile;
 }
 
+export async function updateUserProfile(
+  uid: string,
+  data: Pick<AppUser, "name" | "phone">,
+): Promise<void> {
+  await updateDoc(doc(db, "users", uid), {
+    name: data.name.trim(),
+    displayName: data.name.trim(),
+    phone: data.phone.trim(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
 export function logoutUser() {
   return signOut(auth);
 }

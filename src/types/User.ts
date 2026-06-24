@@ -11,6 +11,7 @@ export interface AppUser {
   role: UserRole;
   roles?: Array<Exclude<UserRole, "admin"> | "admin">;
   phone: string;
+  accountStatus?: "active" | "suspended";
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }

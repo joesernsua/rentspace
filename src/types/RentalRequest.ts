@@ -1,6 +1,6 @@
 import type { Timestamp } from "firebase/firestore";
 
-export const rentalRequestStatuses = ["pending", "approved", "rejected"] as const;
+export const rentalRequestStatuses = ["pending", "approved", "rejected", "cancelled"] as const;
 export type RentalRequestStatus = (typeof rentalRequestStatuses)[number];
 
 export interface RentalRequest {

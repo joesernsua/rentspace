@@ -9,6 +9,26 @@ import {
 } from "../services/chatService";
 import type { Conversation, ChatMessage } from "../types/Chat";
 
+type ChatTypeFilter = "tenant-owner" | "admin-tenant" | "admin-owner";
+
+const chatTypeLabels: Record<ChatTypeFilter, string> = {
+  "tenant-owner": "Tenant - Owner",
+  "admin-tenant": "Admin - Tenant",
+  "admin-owner": "Admin - Owner",
+};
+
+const chatTypes: ChatTypeFilter[] = ["tenant-owner", "admin-tenant", "admin-owner"];
+
+function getVisibleChatTypes(role?: string): ChatTypeFilter[] {
+  if (role === "admin") return ["admin-tenant", "admin-owner"];
+  if (role === "owner") return ["tenant-owner", "admin-owner"];
+  return ["tenant-owner", "admin-tenant"];
+}
+
+function getDefaultChatType(role?: string): ChatTypeFilter {
+  return getVisibleChatTypes(role)[0];
+}
+
 function formatTime(message: ChatMessage) {
   if (!message.createdAt) return "";
   return message.createdAt.toDate().toLocaleString([], {
@@ -24,10 +44,23 @@ function formatPrice(price?: number) {
   return `RM ${price.toLocaleString()} / month`;
 }
 
+function getConversationDisplayName(conversation: Conversation, currentUserId?: string) {
+  if (conversation.type === "admin-tenant" || conversation.type === "admin-owner") {
+    return currentUserId === conversation.adminId
+      ? conversation.userName || conversation.userEmail || "User"
+      : conversation.adminName || "Admin";
+  }
+
+  return currentUserId === conversation.ownerId
+    ? conversation.tenantName || "Tenant"
+    : conversation.ownerName || "Owner";
+}
+
 export default function ChatPage() {
   const { currentUser, userProfile, loading: authLoading } = useAuth();
   const [searchParams] = useSearchParams();
   const requestedConversationId = searchParams.get("conversation") ?? "";
+  const requestedType = searchParams.get("type") as ChatTypeFilter | null;
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -36,6 +69,13 @@ export default function ChatPage() {
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
+  const visibleChatTypes = useMemo(
+    () => getVisibleChatTypes(userProfile?.role),
+    [userProfile?.role],
+  );
+  const [chatTypeFilter, setChatTypeFilter] = useState<ChatTypeFilter>(
+    requestedType && chatTypes.includes(requestedType) ? requestedType : getDefaultChatType(userProfile?.role),
+  );
 
   useEffect(() => {
     if (authLoading) return;
@@ -48,16 +88,34 @@ export default function ChatPage() {
     setError("");
     getUserConversations(currentUser.uid)
       .then((items) => {
-        setConversations(items);
+        const normalizedItems = items.map((item) => ({
+          ...item,
+          type: item.type ?? "tenant-owner",
+        })) as Conversation[];
+        const requestedConversationType = requestedConversationId
+          ? (normalizedItems.find((item) => item.id === requestedConversationId)?.type as ChatTypeFilter | undefined)
+          : undefined;
+        const preferredFilter =
+          requestedType && chatTypes.includes(requestedType)
+            ? requestedType
+            : requestedConversationType ?? chatTypeFilter;
+        const nextFilter = visibleChatTypes.includes(preferredFilter)
+          ? preferredFilter
+          : getDefaultChatType(userProfile?.role);
+
+        setChatTypeFilter(nextFilter);
+        setConversations(normalizedItems);
         setSelectedConversationId((current) =>
-          requestedConversationId && items.some((item) => item.id === requestedConversationId)
+          requestedConversationId && normalizedItems.some((item) => item.id === requestedConversationId)
             ? requestedConversationId
-            : current || items[0]?.id || "",
+            : visibleChatTypes.includes(chatTypeFilter) && current
+              ? current
+              : normalizedItems.find((item) => item.type === nextFilter)?.id || "",
         );
       })
       .catch(() => setError("Unable to load your conversations. Please check your Firestore rules."))
       .finally(() => setLoading(false));
-  }, [authLoading, currentUser, requestedConversationId]);
+  }, [authLoading, currentUser, requestedConversationId, requestedType, chatTypeFilter, userProfile?.role, visibleChatTypes]);
 
   useEffect(() => {
     if (!selectedConversationId) {
@@ -75,6 +133,10 @@ export default function ChatPage() {
   const selectedConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === selectedConversationId),
     [conversations, selectedConversationId],
+  );
+  const filteredConversations = useMemo(
+    () => conversations.filter((conversation) => visibleChatTypes.includes((conversation.type ?? "tenant-owner") as ChatTypeFilter) && (conversation.type ?? "tenant-owner") === chatTypeFilter),
+    [chatTypeFilter, conversations, visibleChatTypes],
   );
 
   const isPropertyCardMine = messages[0]?.senderId === currentUser?.uid;
@@ -97,7 +159,7 @@ export default function ChatPage() {
         getUserConversations(currentUser.uid),
         getConversationMessages(selectedConversationId),
       ]);
-      setConversations(updatedConversations);
+      setConversations(updatedConversations.map((item) => ({ ...item, type: item.type ?? "tenant-owner" })) as Conversation[]);
       setMessages(updatedMessages);
     } catch {
       setError("Unable to send your message. Please try again.");
@@ -135,7 +197,7 @@ export default function ChatPage() {
             <div>
               <h1 className="text-3xl font-black tracking-tight sm:text-4xl">RentSpace Chat</h1>
               <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                Messages from property rental requests will appear here.
+                Messages are separated by admin-tenant, admin-owner, and tenant-owner chats.
               </p>
             </div>
           </div>
@@ -151,16 +213,15 @@ export default function ChatPage() {
           <aside className="border-b border-slate-200 bg-slate-50/70 p-5 dark:border-white/10 dark:bg-slate-950/30 lg:border-b-0 lg:border-r">
             {loading ? (
               <p className="text-sm text-slate-600 dark:text-slate-400">Loading chats...</p>
-            ) : conversations.length === 0 ? (
+            ) : filteredConversations.length === 0 ? (
               <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-300">
-                No messages yet. Send a message from a property page first.
+                No {chatTypeLabels[chatTypeFilter].toLowerCase()} messages yet.
               </div>
             ) : (
               <div className="space-y-3">
-                {conversations.map((conversation) => {
+                {filteredConversations.map((conversation) => {
                   const isActive = conversation.id === selectedConversationId;
-                  const otherName =
-                    currentUser?.uid === conversation.ownerId ? conversation.tenantName : conversation.ownerName;
+                  const otherName = getConversationDisplayName(conversation, currentUser?.uid);
 
                   return (
                     <button
@@ -175,7 +236,7 @@ export default function ChatPage() {
                     >
                       <p className="font-black">{otherName}</p>
                       <p className={`mt-1 line-clamp-1 text-sm ${isActive ? "text-slate-800" : "text-slate-500 dark:text-slate-400"}`}>
-                        {conversation.propertyTitle}
+                        {conversation.type === "admin-tenant" || conversation.type === "admin-owner" ? chatTypeLabels[conversation.type] : conversation.propertyTitle}
                       </p>
                       <p className={`mt-2 line-clamp-1 text-xs ${isActive ? "text-slate-800" : "text-slate-500 dark:text-slate-500"}`}>
                         {conversation.lastMessage}
@@ -200,18 +261,25 @@ export default function ChatPage() {
                       )}
                     </div>
                     <div>
-                      <h2 className="text-lg font-black">{selectedConversation.propertyTitle}</h2>
+                      <h2 className="text-lg font-black">
+                        {selectedConversation.type === "admin-tenant" || selectedConversation.type === "admin-owner"
+                          ? getConversationDisplayName(selectedConversation, currentUser?.uid)
+                          : selectedConversation.propertyTitle}
+                      </h2>
                       <p className="text-sm text-slate-600 dark:text-slate-400">
-                        {currentUser?.uid === selectedConversation.ownerId ? selectedConversation.tenantName : selectedConversation.ownerName}
+                        {selectedConversation.type === "admin-tenant" || selectedConversation.type === "admin-owner"
+                          ? chatTypeLabels[selectedConversation.type]
+                          : getConversationDisplayName(selectedConversation, currentUser?.uid)}
                       </p>
                     </div>
                   </div>
                 </div>
 
                 <div className="flex-1 space-y-4 overflow-y-auto p-5 sm:p-8">
+                  {selectedConversation.type === "tenant-owner" && (
                   <div className={isPropertyCardMine ? "flex justify-end" : "flex justify-start"}>
                     <Link
-                      to={`/properties/${selectedConversation.propertyId}`}
+                      to={`/properties/${selectedConversation.propertyId ?? ""}`}
                       className={`grid max-w-lg gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-lg shadow-slate-900/10 transition hover:-translate-y-0.5 hover:border-emerald-300 dark:border-white/10 dark:bg-white/5 dark:shadow-black/10 sm:grid-cols-[76px_1fr] ${
                         isPropertyCardMine ? "rounded-tr-md" : "rounded-tl-md"
                       }`}
@@ -238,6 +306,7 @@ export default function ChatPage() {
                       </div>
                     </Link>
                   </div>
+                  )}
 
                   {messagesLoading ? (
                     <p className="text-sm text-slate-600 dark:text-slate-400">Loading messages...</p>

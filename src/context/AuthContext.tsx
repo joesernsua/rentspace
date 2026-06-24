@@ -29,6 +29,7 @@ type AuthContextValue = {
   continueWithGoogle: () => Promise<{ user: FirebaseUser; profile: AppUser | null }>;
   loginWithGoogle: (role?: UserRole) => Promise<AppUser>;
   selectRole: (role: UserRole) => Promise<AppUser>;
+  refreshProfile: () => Promise<AppUser | null>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -98,8 +99,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return selectedProfile;
   };
 
+  const refreshProfile = async () => {
+    const profile = auth.currentUser ? await getUserProfile(auth.currentUser.uid) : null;
+    setUserProfile(profile);
+    return profile;
+  };
+
   const value = useMemo(
-    () => ({ currentUser, userProfile, loading, register, logout, continueWithGoogle: handleContinueWithGoogle, loginWithGoogle, selectRole }),
+    () => ({ currentUser, userProfile, loading, register, logout, continueWithGoogle: handleContinueWithGoogle, loginWithGoogle, selectRole, refreshProfile }),
     [currentUser, userProfile, loading],
   );
 

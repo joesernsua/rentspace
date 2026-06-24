@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { FiHeart, FiSliders } from "react-icons/fi";
 import { Link, useSearchParams } from "react-router";
+import { malaysiaLocations, malaysiaStates } from "../data/malaysiaLocations";
 import { getAvailableProperties } from "../services/propertyService";
 import type { Property } from "../types/Property";
 
@@ -10,25 +11,6 @@ const directionOptions: Array<{ label: string; value: Direction }> = [
   { label: "Ascending", value: "asc" },
   { label: "Descending", value: "desc" },
 ];
-
-const malaysiaLocations: Record<string, string[]> = {
-  Johor: ["Johor Bahru", "Batu Pahat", "Muar", "Kluang", "Skudai", "Iskandar Puteri"],
-  Kedah: ["Alor Setar", "Sungai Petani", "Kulim", "Langkawi", "Jitra"],
-  Kelantan: ["Kota Bharu", "Tanah Merah", "Tumpat", "Pasir Mas"],
-  "Kuala Lumpur": ["Bukit Bintang", "Cheras", "Setapak", "Wangsa Maju", "Mont Kiara", "Bangsar"],
-  Labuan: ["Victoria", "Rancha-Rancha", "Kiamsam"],
-  Melaka: ["Melaka City", "Ayer Keroh", "Batu Berendam", "Alor Gajah"],
-  "Negeri Sembilan": ["Seremban", "Nilai", "Port Dickson", "Senawang"],
-  Pahang: ["Kuantan", "Bentong", "Temerloh", "Genting Highlands", "Cameron Highlands"],
-  Penang: ["George Town", "Bayan Lepas", "Butterworth", "Bukit Mertajam", "Tanjung Tokong"],
-  Perak: ["Ipoh", "Kampar", "Taiping", "Batu Gajah", "Sitiawan"],
-  Perlis: ["Kangar", "Arau", "Kuala Perlis"],
-  Putrajaya: ["Precinct 1", "Precinct 8", "Precinct 9", "Precinct 15"],
-  Sabah: ["Kota Kinabalu", "Sandakan", "Tawau", "Lahad Datu"],
-  Sarawak: ["Kuching", "Miri", "Sibu", "Bintulu"],
-  Selangor: ["Petaling Jaya", "Shah Alam", "Subang Jaya", "Puchong", "Cyberjaya", "Kajang", "Klang"],
-  Terengganu: ["Kuala Terengganu", "Dungun", "Kemaman", "Marang"],
-};
 
 function formatPrice(price: number) {
   return `RM ${price.toLocaleString()}`;
@@ -205,7 +187,7 @@ export default function PropertyListingPage() {
           <FilterDropdown
             label="State"
             value={selectedState}
-            options={Object.keys(malaysiaLocations)}
+            options={malaysiaStates}
             onChange={(nextState) => {
               setSelectedState(nextState);
               setSelectedArea("");

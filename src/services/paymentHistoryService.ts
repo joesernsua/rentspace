@@ -38,3 +38,16 @@ export async function getTenantPaymentHistory(
     ...document.data(),
   }) as PaymentHistory);
 }
+
+export async function getOwnerPaymentHistory(
+  ownerId: string,
+): Promise<PaymentHistory[]> {
+  const snapshot = await getDocs(
+    query(paymentHistoryCollection, where("ownerId", "==", ownerId)),
+  );
+
+  return snapshot.docs.map((document) => ({
+    id: document.id,
+    ...document.data(),
+  }) as PaymentHistory);
+}

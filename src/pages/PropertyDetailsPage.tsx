@@ -11,6 +11,7 @@ import {
   getTenantRentalRequests,
 } from "../services/rentalRequestService";
 import type { Property } from "../types/Property";
+import type { AppUser } from "../types/User";
 
 function formatPrice(price: number) {
   return `RM ${price.toLocaleString()}`;
@@ -34,6 +35,10 @@ function getGalleryImages(property: Property) {
   const gallery = images.length > 0 ? images : [primary];
 
   return Array.from({ length: 5 }, (_, index) => gallery[index] ?? primary);
+}
+
+function hasTenantAccess(profile: AppUser | null) {
+  return Boolean(profile && (profile.role === "tenant" || profile.roles?.includes("tenant")));
 }
 
 export default function PropertyDetailsPage() {
@@ -188,7 +193,7 @@ export default function PropertyDetailsPage() {
 
   const handleReport = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!property || !currentUser || userProfile?.role !== "tenant") return;
+    if (!property || !currentUser || !userProfile || !hasTenantAccess(userProfile)) return;
     if (!reportReason || !reportDetails.trim()) {
       setReportMessage("Please select a reason and describe the issue.");
       return;
@@ -455,10 +460,15 @@ export default function PropertyDetailsPage() {
             <button
               type="button"
               onClick={() => {
-                if (!currentUser || userProfile?.role !== "tenant") {
+                if (!currentUser || !userProfile) {
                   navigate("/login.html");
                   return;
                 }
+                if (!hasTenantAccess(userProfile)) {
+                  setReportMessage("Only tenant accounts can submit property reports.");
+                  return;
+                }
+                setReportMessage("");
                 setIsReportOpen((open) => !open);
               }}
               className="mx-auto mt-6 flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"

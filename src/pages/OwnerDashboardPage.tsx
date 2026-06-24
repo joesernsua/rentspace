@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { Link, useLocation, useNavigate } from "react-router";
 import StatusBadge from "../components/StatusBadge";
 import { useAuth } from "../context/AuthContext";
+import { formatLocation, malaysiaLocations, malaysiaStates, parseLocation } from "../data/malaysiaLocations";
 import { getConversationId } from "../services/chatService";
+import { createOwnerSupportTicket, getOwnerSupportTickets } from "../services/ownerSupportService";
+import { getOwnerPaymentHistory } from "../services/paymentHistoryService";
 import {
   createProperty,
-  deleteProperty,
   getOwnerProperties,
   updateProperty,
 } from "../services/propertyService";
@@ -20,13 +22,15 @@ import {
   type CreatePropertyData,
   type Property,
 } from "../types/Property";
+import type { PaymentHistory } from "../types/PaymentHistory";
+import type { OwnerSupportTicket } from "../types/OwnerSupportTicket";
 import type {
   RentalRequest,
   RentalRequestStatus,
 } from "../types/RentalRequest";
 
 type FormData = Omit<CreatePropertyData, "ownerId">;
-type HostSection = "overview" | "properties" | "requests" | "rentals" | "payments";
+type HostSection = "overview" | "properties" | "requests" | "rentals" | "payments" | "support";
 type ActiveRentalRequest = RentalRequest & {
   payment: NonNullable<RentalRequest["payment"]>;
 };
@@ -62,6 +66,7 @@ const sidebarItems: Array<{
   { id: "requests", label: "Requests" },
   { id: "rentals", label: "Rented Homes" },
   { id: "payments", label: "Payment Records" },
+  { id: "support", label: "Admin Support" },
 ];
 
 function formatPrice(price: number) {
@@ -99,6 +104,10 @@ function addOneMonth(date: Date) {
 
 function getDateFromTimestamp(value: RentalRequest["updatedAt"]) {
   return value?.toDate?.();
+}
+
+function formatBillingPeriod(period: PaymentHistory["billingPeriod"]) {
+  return period === "initial" ? "Initial payment" : "Monthly payment";
 }
 
 function addMonths(date: Date, months: number) {
@@ -154,16 +163,19 @@ function getRequestUpdateErrorMessage(error: unknown, action: "approve" | "rejec
 }
 
 export default function OwnerDashboardPage() {
-  const { currentUser } = useAuth();
+  const { currentUser, userProfile } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState<HostSection>("overview");
   const [form, setForm] = useState<FormData>(emptyForm);
+  const [selectedState, setSelectedState] = useState("");
+  const [selectedArea, setSelectedArea] = useState("");
   const [properties, setProperties] = useState<Property[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
   const [isPropertyFormOpen, setIsPropertyFormOpen] = useState(false);
   const [requests, setRequests] = useState<RentalRequest[]>([]);
   const [requestsLoading, setRequestsLoading] = useState(true);
@@ -179,6 +191,17 @@ export default function OwnerDashboardPage() {
   const [utilitiesForm, setUtilitiesForm] = useState<Record<string, string>>({});
   const [savingUtilities, setSavingUtilities] = useState(false);
   const [utilitiesError, setUtilitiesError] = useState("");
+  const [paymentHistory, setPaymentHistory] = useState<PaymentHistory[]>([]);
+  const [paymentHistoryLoading, setPaymentHistoryLoading] = useState(true);
+  const [paymentHistoryError, setPaymentHistoryError] = useState("");
+  const [supportTickets, setSupportTickets] = useState<OwnerSupportTicket[]>([]);
+  const [supportLoading, setSupportLoading] = useState(true);
+  const [supportError, setSupportError] = useState("");
+  const [supportSubject, setSupportSubject] = useState("");
+  const [supportMessage, setSupportMessage] = useState("");
+  const [supportSubmitting, setSupportSubmitting] = useState(false);
+  const [supportSuccess, setSupportSuccess] = useState("");
+  const [showAllPaymentHistory, setShowAllPaymentHistory] = useState(false);
 
   const loadProperties = useCallback(async () => {
     if (!currentUser) return;
@@ -213,10 +236,45 @@ export default function OwnerDashboardPage() {
     }
   }, [currentUser]);
 
+  const loadPaymentHistory = useCallback(async () => {
+    if (!currentUser) return;
+    setPaymentHistoryLoading(true);
+    setPaymentHistoryError("");
+    try {
+      const items = await getOwnerPaymentHistory(currentUser.uid);
+      setPaymentHistory(
+        items.sort(
+          (first, second) =>
+            (second.paidAt?.toMillis() ?? second.createdAt?.toMillis() ?? 0) -
+            (first.paidAt?.toMillis() ?? first.createdAt?.toMillis() ?? 0),
+        ),
+      );
+    } catch {
+      setPaymentHistoryError("Unable to load paid payment history. Please try again.");
+    } finally {
+      setPaymentHistoryLoading(false);
+    }
+  }, [currentUser]);
+
+  const loadSupportTickets = useCallback(async () => {
+    if (!currentUser) return;
+    setSupportLoading(true);
+    setSupportError("");
+    try {
+      setSupportTickets(await getOwnerSupportTickets(currentUser.uid));
+    } catch {
+      setSupportError("Unable to load admin support tickets. Please try again.");
+    } finally {
+      setSupportLoading(false);
+    }
+  }, [currentUser]);
+
   useEffect(() => {
     void loadProperties();
     void loadRequests();
-  }, [loadProperties, loadRequests]);
+    void loadPaymentHistory();
+    void loadSupportTickets();
+  }, [loadProperties, loadRequests, loadPaymentHistory, loadSupportTickets]);
 
   useEffect(() => {
     if (location.hash !== "#add-property") return;
@@ -231,6 +289,7 @@ export default function OwnerDashboardPage() {
     () => requests.filter(isActiveRentalRequest),
     [requests],
   );
+  const displayedPaymentHistory = showAllPaymentHistory ? paymentHistory : paymentHistory.slice(0, 5);
 
   const rentalSummary = useMemo(() => {
     const monthlyIncome = activeRentals.reduce(
@@ -243,6 +302,7 @@ export default function OwnerDashboardPage() {
     );
     const paidRentals = activeRentals.filter((request) => request.payment.status === "paid").length;
     const unpaidRentals = activeRentals.length - paidRentals;
+    const paidHistoryAmount = paymentHistory.reduce((sum, payment) => sum + payment.totalPaid, 0);
     const paidInitialAmount = activeRentals.reduce(
       (sum, request) => sum + (request.payment.status === "paid" ? request.payment.totalDue : 0),
       0,
@@ -258,11 +318,12 @@ export default function OwnerDashboardPage() {
       upfrontCollected,
       paidRentals,
       unpaidRentals,
+      paidHistoryAmount,
       paidInitialAmount,
       unpaidInitialAmount,
       averageRent,
     };
-  }, [activeRentals]);
+  }, [activeRentals, paymentHistory]);
 
   const stats = useMemo(() => {
     const available = properties.filter((property) => property.status === "available").length;
@@ -300,8 +361,16 @@ export default function OwnerDashboardPage() {
     setForm((current) => ({ ...current, [field]: value }));
   };
 
+  const setLocationFromParts = (area: string, state: string) => {
+    setSelectedArea(area);
+    setSelectedState(state);
+    setField("location", formatLocation(area, state));
+  };
+
   const resetForm = () => {
     setForm(emptyForm);
+    setSelectedState("");
+    setSelectedArea("");
     setEditingId(null);
     setIsPropertyFormOpen(false);
   };
@@ -311,12 +380,15 @@ export default function OwnerDashboardPage() {
     if (!currentUser) return;
     if (!form.title.trim() || !form.location.trim() || form.price <= 0 || !form.type) {
       setError("Title, location, a price greater than zero, and property type are required.");
+      setSuccessMessage("");
       return;
     }
 
     setSaving(true);
     setError("");
+    setSuccessMessage("");
     try {
+      const wasEditing = Boolean(editingId);
       const imageUrls = (form.imageUrls ?? []).map((url) => url.trim()).filter(Boolean);
       const payload = {
         ...form,
@@ -331,6 +403,12 @@ export default function OwnerDashboardPage() {
       }
       resetForm();
       await loadProperties();
+      setActiveSection("properties");
+      setSuccessMessage(
+        wasEditing
+          ? "Successfully resubmitted property update. Waiting for admin approval."
+          : "Successfully submitted new property. Waiting for admin approval.",
+      );
     } catch (propertyError) {
       setError(getSavePropertyErrorMessage(propertyError, editingId ? "update" : "create"));
     } finally {
@@ -340,8 +418,12 @@ export default function OwnerDashboardPage() {
 
   const handleEdit = (property: Property) => {
     setEditingId(property.id);
+    setSuccessMessage("");
     setActiveSection("properties");
     setIsPropertyFormOpen(true);
+    const parsedLocation = parseLocation(property.location);
+    setSelectedState(parsedLocation.state);
+    setSelectedArea(parsedLocation.area);
     setForm({
       title: property.title,
       location: property.location,
@@ -360,15 +442,17 @@ export default function OwnerDashboardPage() {
     }, 50);
   };
 
-  const handleDelete = async (property: Property) => {
-    if (!window.confirm(`Delete "${property.title}"? This cannot be undone.`)) return;
+  const handleRequestRemoval = async (property: Property) => {
+    if (!window.confirm(`Request admin approval to remove "${property.title}" from the market? The property record will stay for history tracking.`)) return;
     setError("");
+    setSuccessMessage("");
     try {
-      await deleteProperty(property.id);
+      await updateProperty(property.id, { status: "removal-pending" });
       if (editingId === property.id) resetForm();
       await loadProperties();
+      setSuccessMessage("Removal request submitted. Waiting for admin approval.");
     } catch {
-      setError("Unable to delete the property. Please try again.");
+      setError("Unable to request property removal. Please try again.");
     }
   };
 
@@ -385,6 +469,36 @@ export default function OwnerDashboardPage() {
       setRequestsError(`Unable to ${status === "approved" ? "approve" : "reject"} the request.`);
     } finally {
       setUpdatingRequestId(null);
+    }
+  };
+
+  const handleSupportSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!currentUser || !userProfile) return;
+    if (!supportSubject.trim() || !supportMessage.trim()) {
+      setSupportError("Please enter a subject and message.");
+      return;
+    }
+
+    setSupportSubmitting(true);
+    setSupportError("");
+    setSupportSuccess("");
+    try {
+      const ticketId = await createOwnerSupportTicket({
+        ownerId: currentUser.uid,
+        ownerName: userProfile.name,
+        ownerEmail: userProfile.email,
+        subject: supportSubject.trim(),
+        message: supportMessage.trim(),
+      });
+      setSupportSubject("");
+      setSupportMessage("");
+      setSupportSuccess(`Support ticket submitted. Ticket ID: ${ticketId}`);
+      await loadSupportTickets();
+    } catch {
+      setSupportError("Unable to submit admin support ticket. Please try again.");
+    } finally {
+      setSupportSubmitting(false);
     }
   };
 
@@ -589,6 +703,12 @@ export default function OwnerDashboardPage() {
 
           {activeSection === "properties" && (
             <div className="space-y-8">
+              {successMessage && (
+                <p role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-200">
+                  {successMessage}
+                </p>
+              )}
+
               {!isAddPropertyOnly && (
                 <section className={`${panelClass} p-6`}>
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -604,6 +724,7 @@ export default function OwnerDashboardPage() {
                         type="button"
                         onClick={() => {
                           resetForm();
+                          setSuccessMessage("");
                           setIsPropertyFormOpen(true);
                           navigate("/owner-dashboard#add-property", { replace: false });
                           window.setTimeout(() => {
@@ -669,7 +790,14 @@ export default function OwnerDashboardPage() {
                                   <div className="flex flex-nowrap items-center gap-2">
                                     <Link to={`/properties/${property.id}`} className="rounded-lg bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-200 dark:hover:bg-indigo-500/20">View</Link>
                                     <button type="button" onClick={() => handleEdit(property)} className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200 dark:bg-white/10 dark:text-slate-100 dark:hover:bg-white/15">Edit</button>
-                                    <button type="button" onClick={() => void handleDelete(property)} className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/20">Delete</button>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleRequestRemoval(property)}
+                                      disabled={property.status === "removal-pending" || property.status === "unavailable"}
+                                      className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/20"
+                                    >
+                                      {property.status === "removal-pending" ? "Requested" : property.status === "unavailable" ? "Unavailable" : "Request removal"}
+                                    </button>
                                   </div>
                                 </td>
                               </tr>
@@ -687,7 +815,6 @@ export default function OwnerDashboardPage() {
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <h2 className="text-2xl font-black">{editingId ? "Edit Property" : "Add Property"}</h2>
-                      <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-400">New and edited listings are submitted as pending. An admin must approve them before tenants can discover them.</p>
                     </div>
                     <button
                       type="button"
@@ -704,16 +831,39 @@ export default function OwnerDashboardPage() {
 
                   <form onSubmit={handleSubmit} className="mt-6 grid gap-5 md:grid-cols-2">
                     <label className={labelClass}>Title *<input required value={form.title} onChange={(e) => setField("title", e.target.value)} className={inputClass} /></label>
-                    <label className={labelClass}>Location *<input required value={form.location} onChange={(e) => setField("location", e.target.value)} className={inputClass} /></label>
+                    <label className={labelClass}>
+                      State *
+                      <select
+                        required
+                        value={selectedState}
+                        onChange={(e) => {
+                          const nextState = e.target.value;
+                          setLocationFromParts("", nextState);
+                        }}
+                        className={inputClass}
+                      >
+                        <option className={optionClass} value="">Select state</option>
+                        {malaysiaStates.map((state) => <option className={optionClass} key={state} value={state}>{state}</option>)}
+                      </select>
+                    </label>
+                    <label className={labelClass}>
+                      Area *
+                      <select
+                        required
+                        value={selectedArea}
+                        onChange={(e) => setLocationFromParts(e.target.value, selectedState)}
+                        disabled={!selectedState}
+                        className={inputClass}
+                      >
+                        <option className={optionClass} value="">{selectedState ? "Select area" : "Select state first"}</option>
+                        {(selectedState ? malaysiaLocations[selectedState] : []).map((area) => <option className={optionClass} key={area} value={area}>{area}</option>)}
+                      </select>
+                    </label>
                     <label className={`${labelClass} md:col-span-2`}>Address<input value={form.address} onChange={(e) => setField("address", e.target.value)} className={inputClass} /></label>
                     <label className={labelClass}>Monthly Price (RM) *<input required min="1" type="number" value={form.price || ""} onChange={(e) => setField("price", Number(e.target.value))} className={inputClass} /></label>
                     <label className={labelClass}>Type *<select value={form.type} onChange={(e) => setField("type", e.target.value as FormData["type"])} className={inputClass}>{propertyTypes.map((type) => <option className={optionClass} key={type}>{type}</option>)}</select></label>
                     <label className={labelClass}>Rooms<input min="0" type="number" value={form.rooms} onChange={(e) => setField("rooms", Number(e.target.value))} className={inputClass} /></label>
                     <label className={labelClass}>Bathrooms<input min="0" type="number" value={form.bathrooms} onChange={(e) => setField("bathrooms", Number(e.target.value))} className={inputClass} /></label>
-                    <div className={`${labelClass} rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200`}>
-                      <span>Approval status</span>
-                      <p className="mt-2 text-sm font-semibold">Pending admin approval</p>
-                    </div>
                     <div className={`${labelClass} md:col-span-2`}>
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
@@ -1034,7 +1184,7 @@ export default function OwnerDashboardPage() {
                 <div>
                   <h2 className="text-2xl font-black">Payment Records</h2>
                   <p className="mt-1 text-slate-600 dark:text-slate-400">
-                    Check which rented homes have completed their initial payment and which ones are still pending.
+                    Check active rental payment status and review every paid payment history record.
                   </p>
                 </div>
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-bold text-slate-700 dark:bg-white/10 dark:text-slate-200">
@@ -1042,11 +1192,11 @@ export default function OwnerDashboardPage() {
                 </span>
               </div>
 
-              {requestsLoading ? (
+              {requestsLoading || paymentHistoryLoading ? (
                 <p className="mt-5 text-slate-600 dark:text-slate-400">Loading payment records...</p>
-              ) : requestsError ? (
-                <p role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700 dark:border-red-400/20 dark:bg-red-500/10 dark:text-red-200">{requestsError}</p>
-              ) : activeRentals.length === 0 ? (
+              ) : requestsError || paymentHistoryError ? (
+                <p role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700 dark:border-red-400/20 dark:bg-red-500/10 dark:text-red-200">{requestsError || paymentHistoryError}</p>
+              ) : activeRentals.length === 0 && paymentHistory.length === 0 ? (
                 <div className={`mt-5 ${mutedCardClass}`}>
                   <p>No payment records yet. Approve a rental request with payment details first.</p>
                   <button
@@ -1061,9 +1211,9 @@ export default function OwnerDashboardPage() {
                 <div className="mt-6 space-y-6">
                   <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                     <article className="rounded-2xl border border-slate-200 bg-emerald-50 p-5 dark:border-emerald-300/20 dark:bg-emerald-400/10">
-                      <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300">Paid homes</p>
-                      <p className="mt-3 text-3xl font-black text-slate-950 dark:text-white">{rentalSummary.paidRentals}</p>
-                      <p className="mt-2 text-sm text-emerald-700 dark:text-emerald-300">{formatPrice(rentalSummary.paidInitialAmount)} received</p>
+                      <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300">Paid history</p>
+                      <p className="mt-3 text-3xl font-black text-slate-950 dark:text-white">{paymentHistory.length}</p>
+                      <p className="mt-2 text-sm text-emerald-700 dark:text-emerald-300">{formatPrice(rentalSummary.paidHistoryAmount)} received</p>
                     </article>
                     <article className="rounded-2xl border border-slate-200 bg-amber-50 p-5 dark:border-amber-300/20 dark:bg-amber-400/10">
                       <p className="text-sm font-bold text-amber-700 dark:text-amber-300">Unpaid homes</p>
@@ -1082,6 +1232,7 @@ export default function OwnerDashboardPage() {
                     </article>
                   </div>
 
+                  {activeRentals.length > 0 && (
                   <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-white/10">
                     <div className="overflow-x-auto">
                       <table className="w-full min-w-[1240px] table-fixed text-left text-sm">
@@ -1176,6 +1327,183 @@ export default function OwnerDashboardPage() {
                         </tbody>
                       </table>
                     </div>
+                  </div>
+                  )}
+
+                  {paymentHistory.length > 0 && (
+                    <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-white/10">
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-4 dark:border-white/10 dark:bg-white/5">
+                        <div>
+                          <h3 className="font-black text-slate-950 dark:text-white">Paid Payment History</h3>
+                          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">Showing {displayedPaymentHistory.length} of {paymentHistory.length} records.</p>
+                        </div>
+                        {paymentHistory.length > 5 && (
+                          <button
+                            type="button"
+                            onClick={() => setShowAllPaymentHistory((current) => !current)}
+                            className="rounded-xl bg-indigo-50 px-4 py-2 text-sm font-black text-indigo-700 transition hover:bg-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-200 dark:hover:bg-indigo-500/20"
+                          >
+                            {showAllPaymentHistory ? "Show latest 5" : "View all"}
+                          </button>
+                        )}
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[1040px] table-fixed text-left text-sm">
+                          <colgroup>
+                            <col className="w-[24%]" />
+                            <col className="w-[16%]" />
+                            <col className="w-[14%]" />
+                            <col className="w-[12%]" />
+                            <col className="w-[12%]" />
+                            <col className="w-[12%]" />
+                            <col className="w-[10%]" />
+                          </colgroup>
+                          <thead className="bg-slate-50 text-xs font-black uppercase tracking-[0.18em] text-slate-500 dark:bg-white/5 dark:text-slate-400">
+                            <tr>
+                              <th className="px-4 py-4">Home</th>
+                              <th className="px-4 py-4">Tenant</th>
+                              <th className="px-4 py-4">Period</th>
+                              <th className="px-4 py-4">Paid</th>
+                              <th className="px-4 py-4">Method</th>
+                              <th className="px-4 py-4">Paid date</th>
+                              <th className="px-4 py-4">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200 dark:divide-white/10">
+                            {displayedPaymentHistory.map((payment) => {
+                              const paidDate = getDateFromTimestamp(payment.paidAt ?? payment.createdAt);
+
+                              return (
+                                <tr key={payment.id} className="align-middle transition hover:bg-slate-50/70 dark:hover:bg-white/[0.03]">
+                                  <td className="px-4 py-4">
+                                    <p className="truncate font-black text-slate-950 dark:text-white">{payment.propertyTitle}</p>
+                                    <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{payment.propertyLocation}</p>
+                                  </td>
+                                  <td className="px-4 py-4">
+                                    <p className="font-bold text-slate-950 dark:text-white">{payment.tenantName}</p>
+                                    <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{payment.tenantEmail}</p>
+                                  </td>
+                                  <td className="px-4 py-4 font-bold text-slate-950 dark:text-white">{formatBillingPeriod(payment.billingPeriod)}</td>
+                                  <td className="px-4 py-4 font-black text-slate-950 dark:text-white">{formatPrice(payment.totalPaid)}</td>
+                                  <td className="px-4 py-4 font-bold capitalize text-slate-950 dark:text-white">
+                                    {payment.paymentMethodType.replace("-", " ")}{payment.cardLast4 ? ` ${payment.cardLast4}` : ""}
+                                  </td>
+                                  <td className="px-4 py-4 font-bold text-slate-950 dark:text-white">{paidDate ? formatDate(paidDate) : "-"}</td>
+                                  <td className="px-4 py-4">
+                                    <span className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700 ring-1 ring-emerald-600/20 dark:bg-emerald-400/10 dark:text-emerald-300 dark:ring-emerald-300/20">
+                                      Paid
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
+          {activeSection === "support" && (
+            <section className={`${panelClass} p-6`}>
+              <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-black">Admin Support</h2>
+                  <p className="mt-1 text-slate-600 dark:text-slate-400">
+                    Send admin a support ticket and track their reply here.
+                  </p>
+                </div>
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-bold text-slate-700 dark:bg-white/10 dark:text-slate-200">
+                  {supportTickets.length} ticket{supportTickets.length === 1 ? "" : "s"}
+                </span>
+              </div>
+
+              <form onSubmit={handleSupportSubmit} className="mt-6 grid gap-4 md:grid-cols-[1fr_auto]">
+                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 md:col-span-2">
+                  Subject
+                  <input
+                    required
+                    value={supportSubject}
+                    onChange={(event) => setSupportSubject(event.target.value)}
+                    placeholder="Example: Need help with property approval"
+                    className={inputClass}
+                  />
+                </label>
+                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 md:col-span-2">
+                  Message
+                  <textarea
+                    required
+                    rows={5}
+                    value={supportMessage}
+                    onChange={(event) => setSupportMessage(event.target.value)}
+                    placeholder="Explain what you need admin to help with."
+                    className={inputClass}
+                  />
+                </label>
+                <button
+                  disabled={supportSubmitting}
+                  className="rounded-xl bg-emerald-600 px-5 py-3 font-black text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                >
+                  {supportSubmitting ? "Submitting..." : "Send to admin"}
+                </button>
+              </form>
+
+              {(supportError || supportSuccess) && (
+                <p role="status" className={`mt-5 rounded-xl border p-4 text-sm font-bold ${
+                  supportError
+                    ? "border-red-200 bg-red-50 text-red-700 dark:border-red-400/20 dark:bg-red-500/10 dark:text-red-200"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-200"
+                }`}>
+                  {supportError || supportSuccess}
+                </p>
+              )}
+
+              {supportLoading ? (
+                <p className="mt-5 text-slate-600 dark:text-slate-400">Loading support tickets...</p>
+              ) : supportTickets.length === 0 ? (
+                <p className={`mt-5 ${mutedCardClass}`}>No support tickets yet.</p>
+              ) : (
+                <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200 dark:border-white/10">
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[980px] table-fixed text-left text-sm">
+                      <colgroup>
+                        <col className="w-[18%]" />
+                        <col className="w-[22%]" />
+                        <col className="w-[14%]" />
+                        <col className="w-[28%]" />
+                        <col className="w-[18%]" />
+                      </colgroup>
+                      <thead className="bg-slate-50 text-xs font-black uppercase tracking-[0.18em] text-slate-500 dark:bg-white/5 dark:text-slate-400">
+                        <tr>
+                          <th className="px-4 py-4">Ticket</th>
+                          <th className="px-4 py-4">Subject</th>
+                          <th className="px-4 py-4">Status</th>
+                          <th className="px-4 py-4">Admin reply</th>
+                          <th className="px-4 py-4">Updated</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-white/10">
+                        {supportTickets.map((ticket) => (
+                          <tr key={ticket.id} className="align-top">
+                            <td className="px-4 py-4 font-mono text-xs font-bold text-slate-500 dark:text-slate-400">{ticket.id}</td>
+                            <td className="px-4 py-4">
+                              <p className="font-black text-slate-950 dark:text-white">{ticket.subject}</p>
+                              <p className="mt-1 line-clamp-2 text-xs text-slate-500 dark:text-slate-400" title={ticket.message}>{ticket.message}</p>
+                            </td>
+                            <td className="px-4 py-4"><StatusBadge value={ticket.status} /></td>
+                            <td className="px-4 py-4 text-slate-600 dark:text-slate-300">{ticket.adminReply || "Waiting for admin reply."}</td>
+                            <td className="px-4 py-4 font-bold text-slate-950 dark:text-white">
+                              {getDateFromTimestamp(ticket.updatedAt ?? ticket.createdAt)
+                                ? formatDate(getDateFromTimestamp(ticket.updatedAt ?? ticket.createdAt) as Date)
+                                : "-"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               )}

@@ -68,6 +68,13 @@ export async function updateRentalRequestStatus(
   });
 }
 
+export async function cancelRentalRequestAsTenant(requestId: string): Promise<void> {
+  await updateDoc(doc(db, "rentalRequests", requestId), {
+    status: "cancelled",
+    updatedAt: serverTimestamp(),
+  });
+}
+
 export async function approveRentalRequestWithPayment(
   requestId: string,
   payment: {

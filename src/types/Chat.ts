@@ -2,12 +2,18 @@ import type { Timestamp } from "firebase/firestore";
 
 export interface Conversation {
   id: string;
+  type?: "tenant-owner" | "admin-tenant" | "admin-owner";
   participantIds: string[];
-  ownerId: string;
-  tenantId: string;
-  ownerName: string;
-  tenantName: string;
-  propertyId: string;
+  ownerId?: string;
+  tenantId?: string;
+  ownerName?: string;
+  tenantName?: string;
+  adminId?: string;
+  adminName?: string;
+  userId?: string;
+  userName?: string;
+  userEmail?: string;
+  propertyId?: string;
   propertyTitle: string;
   propertyLocation?: string;
   propertyPrice?: number;

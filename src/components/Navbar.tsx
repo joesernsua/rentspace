@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { FiHeart, FiMessageCircle } from "react-icons/fi";
 import { Link, NavLink, useLocation, useNavigate } from "react-router";
+import TenantProfilePanel from "./TenantProfilePanel";
 import { getDashboardPath } from "./ProtectedRoute";
 import { useAuth } from "../context/AuthContext";
 
@@ -35,11 +36,18 @@ export default function Navbar() {
     if (savedTheme) return savedTheme === "dark";
     return window.matchMedia("(prefers-color-scheme: dark)").matches;
   });
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
   const isLoggedIn = Boolean(currentUser && userProfile);
   const googlePhotoUrl = currentUser?.photoURL;
   const userRoles = userProfile?.roles ?? (userProfile ? [userProfile.role] : []);
   const hasOwnerDashboard = userRoles.includes("owner");
   const hasTenantDashboard = userRoles.includes("tenant");
+  const chatPath =
+    userProfile?.role === "admin"
+      ? "/chat?type=admin-tenant"
+      : userProfile?.role === "owner"
+        ? "/chat?type=admin-owner"
+        : "/chat?type=tenant-owner";
   const links: NavItem[] = isLoggedIn
     ? [
         ...publicLinks,
@@ -84,6 +92,10 @@ export default function Navbar() {
     document.documentElement.classList.toggle("dark", isDarkMode);
     window.localStorage.setItem("rentspace-theme", isDarkMode ? "dark" : "light");
   }, [isDarkMode]);
+
+  useEffect(() => {
+    setIsProfileOpen(false);
+  }, [location.pathname, location.hash]);
 
   return (
     <header className="site-header sticky top-0 z-50 px-4 py-5 sm:px-6">
@@ -135,7 +147,7 @@ export default function Navbar() {
           </NavLink>
 
           <NavLink
-            to="/chat"
+            to={chatPath}
             aria-label="Open chat"
             title="Chat"
             className={({ isActive }) =>
@@ -170,20 +182,30 @@ export default function Navbar() {
           )}
 
           {isLoggedIn && userProfile && (
-            <div
-              className="grid h-11 w-11 place-items-center overflow-hidden rounded-full border border-emerald-300/40 bg-gradient-to-br from-emerald-300 to-cyan-500 text-xs font-black text-slate-950 shadow-lg shadow-cyan-500/10"
-              title={`${userProfile.name || userProfile.email} · ${userProfile.role}`}
-              aria-label={`${userProfile.name || userProfile.email}, ${userProfile.role}`}
-            >
-              {googlePhotoUrl ? (
-                <img
-                  src={googlePhotoUrl}
-                  alt={userProfile.name || userProfile.email || "Google profile"}
-                  className="h-full w-full object-cover"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                getInitials(userProfile.name, userProfile.email)
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsProfileOpen((open) => !open)}
+                className="grid h-11 w-11 place-items-center overflow-hidden rounded-full border border-emerald-300/40 bg-gradient-to-br from-emerald-300 to-cyan-500 text-xs font-black text-slate-950 shadow-lg shadow-cyan-500/10 transition hover:scale-105"
+                title={`${userProfile.name || userProfile.email} - ${userProfile.role}`}
+                aria-label="Open profile"
+                aria-expanded={isProfileOpen}
+              >
+                {googlePhotoUrl ? (
+                  <img
+                    src={googlePhotoUrl}
+                    alt={userProfile.name || userProfile.email || "Google profile"}
+                    className="h-full w-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  getInitials(userProfile.name, userProfile.email)
+                )}
+              </button>
+              {isProfileOpen && (
+                <div className="absolute right-0 top-14 z-[70] w-[min(92vw,32rem)] rounded-3xl border border-slate-200 bg-white p-3 shadow-2xl shadow-slate-950/20 dark:border-white/10 dark:bg-slate-950">
+                  <TenantProfilePanel compact />
+                </div>
               )}
             </div>
           )}

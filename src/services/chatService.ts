@@ -2,6 +2,7 @@ import {
   addDoc,
   collection,
   doc,
+  getDoc,
   getDocs,
   orderBy,
   query,
@@ -44,8 +45,22 @@ export type StartConversationInput = {
   senderName: string;
 };
 
+export type StartAdminUserConversationInput = {
+  adminId: string;
+  adminName: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  userRole: "tenant" | "owner";
+  message: string;
+};
+
 export function getConversationId(propertyId: string, tenantId: string, ownerId: string) {
   return `${propertyId}_${tenantId}_${ownerId}`;
+}
+
+export function getAdminUserConversationId(adminId: string, userId: string) {
+  return `admin_${adminId}_${userId}`;
 }
 
 export async function startPropertyConversation(input: StartConversationInput) {
@@ -56,6 +71,7 @@ export async function startPropertyConversation(input: StartConversationInput) {
   await setDoc(
     conversationRef,
     {
+      type: "tenant-owner",
       participantIds: [input.tenantId, input.ownerId],
       ownerId: input.ownerId,
       tenantId: input.tenantId,
@@ -83,6 +99,50 @@ export async function startPropertyConversation(input: StartConversationInput) {
     senderName: input.senderName,
     text: trimmedMessage,
   });
+
+  return conversationId;
+}
+
+export async function startAdminUserConversation(input: StartAdminUserConversationInput) {
+  const conversationId = getAdminUserConversationId(input.adminId, input.userId);
+  const conversationRef = doc(db, "conversations", conversationId);
+  const existingConversation = await getDoc(conversationRef);
+  const trimmedMessage = input.message.trim() || "Hi, admin is contacting you about your RentSpace account.";
+
+  await setDoc(
+    conversationRef,
+    {
+      type: input.userRole === "owner" ? "admin-owner" : "admin-tenant",
+      participantIds: [input.adminId, input.userId],
+      adminId: input.adminId,
+      adminName: input.adminName,
+      userId: input.userId,
+      userName: input.userName,
+      userEmail: input.userEmail,
+      propertyId: "",
+      propertyTitle: "Admin Support",
+      propertyLocation: "",
+      propertyPrice: 0,
+      propertyType: "",
+      propertyRooms: 0,
+      propertyBathrooms: 0,
+      propertyImageUrl: "",
+      lastMessage: trimmedMessage,
+      lastMessageAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
+
+  if (!existingConversation.exists()) {
+    await sendConversationMessage({
+      conversationId,
+      senderId: input.adminId,
+      senderName: input.adminName,
+      text: trimmedMessage,
+    });
+  }
 
   return conversationId;
 }

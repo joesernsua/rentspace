@@ -1,7 +1,7 @@
 import type { Timestamp } from "firebase/firestore";
 
 export const propertyTypes = ["Room", "Apartment", "House", "Condo"] as const;
-export const propertyStatuses = ["available", "pending", "rented"] as const;
+export const propertyStatuses = ["available", "pending", "removal-pending", "unavailable", "rented"] as const;
 
 export type PropertyType = (typeof propertyTypes)[number];
 export type PropertyStatus = (typeof propertyStatuses)[number];

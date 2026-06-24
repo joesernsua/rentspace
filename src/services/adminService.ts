@@ -10,6 +10,7 @@ import {
   type Timestamp,
 } from "firebase/firestore";
 import { db } from "../config/firebase";
+import type { Conversation } from "../types/Chat";
 import type { PaymentHistory } from "../types/PaymentHistory";
 import type { Property, PropertyStatus } from "../types/Property";
 import type { RentalRequest, RentalRequestStatus } from "../types/RentalRequest";
@@ -71,6 +72,10 @@ export function getAllAdminInvitesAsAdmin(): Promise<AdminInvite[]> {
   return getCollectionItems<AdminInvite>("adminInvites");
 }
 
+export function getAllConversationsAsAdmin(): Promise<Conversation[]> {
+  return getCollectionItems<Conversation>("conversations");
+}
+
 export function addAdminInviteAsBoss(
   email: string,
   createdBy: string,
@@ -90,10 +95,6 @@ export function deleteAdminInviteAsBoss(email: string): Promise<void> {
   return deleteDoc(doc(db, "adminInvites", normalizeAdminInviteEmail(email)));
 }
 
-export function deletePropertyAsAdmin(propertyId: string): Promise<void> {
-  return deleteDoc(doc(db, "properties", propertyId));
-}
-
 export function deleteRentalRequestAsAdmin(requestId: string): Promise<void> {
   return deleteDoc(doc(db, "rentalRequests", requestId));
 }
@@ -108,12 +109,45 @@ export function updateRentalRequestStatusAsAdmin(
   });
 }
 
+export function approveRentalRequestAsAdmin(
+  request: RentalRequest,
+): Promise<void> {
+  const monthlyRent = request.payment?.monthlyRent ?? request.propertyPrice;
+  const rentDeposit = request.payment?.rentDeposit ?? monthlyRent;
+  const utilityDeposit = request.payment?.utilityDeposit ?? 0;
+  const totalDue = rentDeposit + utilityDeposit + monthlyRent;
+
+  return updateDoc(doc(db, "rentalRequests", request.id), {
+    status: "approved",
+    payment: {
+      rentDeposit,
+      utilityDeposit,
+      monthlyRent,
+      totalDue,
+      status: request.payment?.status ?? "unpaid",
+      ...(request.payment?.paidAt ? { paidAt: request.payment.paidAt } : {}),
+      ...(request.payment?.monthlyUtilities ? { monthlyUtilities: request.payment.monthlyUtilities } : {}),
+    },
+    updatedAt: serverTimestamp(),
+  });
+}
+
 export function updatePropertyStatusAsAdmin(
   propertyId: string,
   status: PropertyStatus,
 ): Promise<void> {
   return updateDoc(doc(db, "properties", propertyId), {
     status,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export function updateUserAccountStatusAsAdmin(
+  uid: string,
+  accountStatus: NonNullable<AppUser["accountStatus"]>,
+): Promise<void> {
+  return updateDoc(doc(db, "users", uid), {
+    accountStatus,
     updatedAt: serverTimestamp(),
   });
 }

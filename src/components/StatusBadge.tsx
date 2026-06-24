@@ -1,9 +1,15 @@
 type BadgeValue =
   | "available"
   | "pending"
+  | "removal-pending"
+  | "unavailable"
   | "rented"
   | "approved"
   | "rejected"
+  | "cancelled"
+  | "open"
+  | "reviewing"
+  | "resolved"
   | "tenant"
   | "owner"
   | "admin";
@@ -12,8 +18,14 @@ const badgeClasses: Record<BadgeValue, string> = {
   available: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
   approved: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
   pending: "bg-amber-50 text-amber-700 ring-amber-600/20",
+  "removal-pending": "bg-orange-50 text-orange-700 ring-orange-600/20",
+  unavailable: "bg-slate-100 text-slate-700 ring-slate-600/20",
   rented: "bg-sky-50 text-sky-700 ring-sky-600/20",
   rejected: "bg-red-50 text-red-700 ring-red-600/20",
+  cancelled: "bg-slate-100 text-slate-700 ring-slate-600/20",
+  open: "bg-red-50 text-red-700 ring-red-600/20",
+  reviewing: "bg-amber-50 text-amber-700 ring-amber-600/20",
+  resolved: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
   tenant: "bg-sky-50 text-sky-700 ring-sky-600/20",
   owner: "bg-violet-50 text-violet-700 ring-violet-600/20",
   admin: "bg-slate-100 text-slate-700 ring-slate-600/20",
@@ -21,6 +33,7 @@ const badgeClasses: Record<BadgeValue, string> = {
 
 const badgeLabels: Partial<Record<BadgeValue, string>> = {
   approved: "accepted",
+  "removal-pending": "Removal pending",
 };
 
 export default function StatusBadge({ value }: { value: BadgeValue }) {

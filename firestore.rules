@@ -85,6 +85,17 @@ service cloud.firestore {
         && request.resource.data.adminEmployeeRole == get(adminInvite(request.resource.data.email)).data.employeeRole;
     }
 
+    function selfCanUpdateBasicProfile(uid) {
+      return isSelf(uid)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.roles == resource.data.roles
+        && request.resource.data.name is string
+        && request.resource.data.phone is string
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'displayName', 'phone', 'updatedAt']);
+    }
+
     function invitedEmployeeCanAcceptInvite(email) {
       return signedIn()
         && request.auth.token.email == email
@@ -161,6 +172,33 @@ service cloud.firestore {
         && request.resource.data.status == 'open';
     }
 
+    function isValidOwnerSupportTicketCreate() {
+      return isOwnerRole()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerEmail == request.auth.token.email
+        && request.resource.data.ownerName is string
+        && request.resource.data.subject is string
+        && request.resource.data.message is string
+        && request.resource.data.status == 'open'
+        && request.resource.data.adminReply == '';
+    }
+
+    function isValidConversationCreate() {
+      return signedIn()
+        && request.auth.uid in request.resource.data.participantIds
+        && request.resource.data.participantIds.size() == 2
+        && (
+          !('type' in request.resource.data)
+          || request.resource.data.type == 'tenant-owner'
+          || (
+            request.resource.data.type in ['admin-tenant', 'admin-owner']
+            && isAdmin()
+            && request.resource.data.adminId == request.auth.uid
+            && request.resource.data.userId in request.resource.data.participantIds
+          )
+        );
+    }
+
     function ownerCanRejectRentalRequest() {
       return signedIn()
         && resource.data.ownerId == request.auth.uid
@@ -218,6 +256,16 @@ service cloud.firestore {
         && request.resource.data.payment.diff(resource.data.payment).affectedKeys().hasOnly(['status', 'paidAt']);
     }
 
+    function tenantCanCancelRentalRequest() {
+      return signedIn()
+        && resource.data.tenantId == request.auth.uid
+        && resource.data.status == 'pending'
+        && request.resource.data.tenantId == resource.data.tenantId
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.status == 'cancelled'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']);
+    }
+
     match /users/{uid} {
       allow create: if (
           isSelf(uid)
@@ -233,6 +281,7 @@ service cloud.firestore {
       allow list: if isAdmin();
 
       allow update: if isAdmin()
+        || selfCanUpdateBasicProfile(uid)
         || (
           isSelf(uid)
           && request.resource.data.uid == uid
@@ -301,7 +350,8 @@ service cloud.firestore {
         || ownerCanRejectRentalRequest()
         || ownerCanApproveRentalRequest()
         || ownerCanUpdateMonthlyUtilities()
-        || tenantCanMarkRentalRequestPaid();
+        || tenantCanMarkRentalRequestPaid()
+        || tenantCanCancelRentalRequest();
 
       allow delete: if isAdmin();
     }
@@ -342,9 +392,7 @@ service cloud.firestore {
     }
 
     match /conversations/{conversationId} {
-      allow create: if signedIn()
-        && request.auth.uid in request.resource.data.participantIds
-        && request.resource.data.participantIds.size() == 2;
+      allow create: if isValidConversationCreate();
 
       allow get, list: if isAdmin()
         || (signedIn() && request.auth.uid in resource.data.participantIds);
@@ -393,6 +441,25 @@ service cloud.firestore {
         && request.resource.data.details == resource.data.details
         && request.resource.data.status in ['open', 'reviewing', 'resolved', 'rejected']
         && request.resource.data.adminReply is string;
+
+      allow delete: if isAdmin();
+    }
+
+    match /ownerSupportTickets/{ticketId} {
+      allow create: if isValidOwnerSupportTicketCreate();
+
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.ownerId == request.auth.uid);
+
+      allow update: if isAdmin()
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.ownerName == resource.data.ownerName
+        && request.resource.data.ownerEmail == resource.data.ownerEmail
+        && request.resource.data.subject == resource.data.subject
+        && request.resource.data.message == resource.data.message
+        && request.resource.data.status in ['open', 'reviewing', 'resolved', 'rejected']
+        && request.resource.data.adminReply is string
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'adminReply', 'resolvedBy', 'repliedAt', 'updatedAt']);
 
       allow delete: if isAdmin();
     }
