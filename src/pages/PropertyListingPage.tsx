@@ -52,7 +52,7 @@ function FilterDropdown({
   const selectedLabel = normalizedOptions.find((option) => option.value === value)?.label ?? (value || label);
 
   return (
-    <div className="relative z-50">
+    <div className={`relative ${isOpen ? "z-[60]" : "z-50"}`}>
       <button
         type="button"
         onClick={() => setIsOpen((open) => !open)}
